@@ -15,3 +15,6 @@ This repository features implementations of CorrL in different languages:
 * [Koka](https://github.com/koka-lang/koka)
 * [Multicore OCaml](https://github.com/ocamllabs/ocaml-multicore)
 
+## Contributors
+
+* @namin
