@@ -133,13 +133,14 @@ module ManyWorlds = struct
       | [] -> ()
       | x::xs -> worlds := xs; x ()
       end in
-    match action () with
+    begin match action () with
     | x -> onDone(x); next ()
     | effect Fork k ->
-       let k2 = Obj.clone k in (* This is where we need multi-shot continuations  *)
-       let choices = [fun () -> continue k true; fun () -> continue k2 false] in
+       let k2 = Obj.clone_continuation k in (* This is where we need multi-shot continuations  *)
+       let choices = [(fun () -> continue k true); (fun () -> continue k2 false)] in
        worlds := !worlds @ choices;
        next ()
+    end
 
   let handler onDone action = run onDone (ref []) action     
 end
