@@ -112,7 +112,7 @@ module SingleWorld(T: SomeT) = struct
   effect Cancel : unit
 
   let yield x = perform (Yield x)
-  let cancel = perform Cancel              
+  let cancel () = perform Cancel              
          
   let handler action =
     match action () with
@@ -123,8 +123,7 @@ end
 
 module ManyWorlds = struct
   effect Fork : bool  
-
-  let fork = perform Fork
+  let fork () = perform Fork
 
   (* TODO can we have this mutability-free? Seems we need shallow handlers. *)
   let run onDone worlds action =
@@ -134,7 +133,7 @@ module ManyWorlds = struct
       | x::xs -> worlds := xs; x ()
       end in
     begin match action () with
-    | x -> onDone(x); next ()
+    | x -> onDone(x); next () (* TODO should this be interleaved? *)
     | effect Fork k ->
        let k2 = Obj.clone_continuation k in (* This is where we need multi-shot continuations  *)
        let choices = [(fun () -> continue k true); (fun () -> continue k2 false)] in
