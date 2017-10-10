@@ -10,6 +10,7 @@ module type Async = sig
   (** yields control to another task *)
   val run   : (unit -> 'a) -> unit
   (** Runs the scheduler *)
+  val liftPromise : 'a -> 'a promise
 end
 
 module Async : Async = struct
@@ -17,9 +18,11 @@ module Async : Async = struct
   type 'a _promise =
     Waiting of ('a,unit) continuation list
   | Done of 'a
-
+          
   type 'a promise = 'a _promise ref
 
+  let liftPromise x = ref (Done x)                      
+                      
   effect Async : (unit -> 'a) -> 'a promise
   let async f = perform (Async f)
 
@@ -64,42 +67,50 @@ module Async : Async = struct
     fork (ref (Waiting [])) main
 end 
 
-(* Time models are monoids over some time representation *)
-module type TimeModel = sig
-  type time                
-  val ( <@> ) : time -> time -> time
-  val tzero : time  
-end
-
-(* An event is evidence of something that happened at a specific time *)                      
-module type Event = sig
-  type time
-  type 'a evt     
-end
-
-module Event(T: TimeModel) = struct
-  type time = T.time
-  type 'a evt = Ev of 'a * time
-end
-                           
-(* Our default time model is interval-based *)
-module Interval : TimeModel = struct
-  type time = int * int
-  let ( <@> ) (a,b) (c,d) = (min a c, max b d)
-  let tzero = (max_int, min_int) (* representation of empty interval *)                         
-end
+                     
+(* (\* Time models are monoids over some time representation *\)
+ * module type TimeModel = sig
+ *   type time                
+ *   val ( <@> ) : time -> time -> time
+ *   val tzero : time  
+ * end
+ * 
+ * (\* An event is evidence of something that happened at a specific time *\)                      
+ * module type Event = sig
+ *   type time
+ *   type 'a evt     
+ * end
+ * 
+ * module Event(T: TimeModel) = struct
+ *   type time = T.time
+ *   type 'a evt = Ev of 'a * time
+ * end
+ *                            
+ * (\* Our default time model is interval-based *\)
+ * module Interval : TimeModel = struct
+ *   type time = int * int
+ *   let ( <@> ) (a,b) (c,d) = (min a c, max b d)
+ *   let tzero = (max_int, min_int) (\* representation of empty interval *\)                         
+ * end *)
                  
-module Evt = Event(Interval)
+module Evt = struct
+  let ( <@> ) (a,b) (c,d) = (min a c, max b d)
+  let tzero = (max_int, min_int) (* representation of empty interval *)               
+  type 'a evt = Ev of 'a * (int * int)                      
+end
 
 (* Event streams *)           
-module Reactive(E: Event) = struct
-  type 'a react = RNil | RCons of ('a E.evt) * ('a react Async.promise)
+module Reactive = struct
+  type 'a react = RNil | RCons of ('a Evt.evt) * ('a react Async.promise)
+
+  let rec toReact: 'a Evt.evt list -> 'a react =
+    function
+    | [] -> RNil
+    | x::xs -> RCons (x, (Async.liftPromise (toReact xs)))
 end
 
-module R = Reactive(Evt)                                
-           
 open Evt
-open R       
+open Reactive       
 
 module type SomeT = sig
   type t
@@ -137,7 +148,7 @@ module ManyWorlds = struct
     | effect Fork k ->
        let k2 = Obj.clone_continuation k in (* This is where we need multi-shot continuations  *)
        let choices = [(fun () -> continue k true); (fun () -> continue k2 false)] in
-       worlds := !worlds @ choices;
+       worlds := !worlds @ choices; (* Swap for DFS  *)
        next ()
     end
 
@@ -149,5 +160,58 @@ module Output(T: SomeT) = struct
   effect Out: t -> unit
 end
 
+module type Callback = sig
+  type elem
+  val push : elem -> unit     
+end
+                     
+module Callback(T: SomeT): Callback = struct
+  type elem = T.t
+  effect Push: elem -> unit
+  let push v = perform (Push v)       
+end
 
+module State(T: SomeT) = struct
+  type state = T.t
+  effect Get: state
+  effect Set: state -> unit
+  let get () = perform Get
+  let set v = perform (Set v)
+                        
+  let handler (init: state) action =
+    let value = ref init in (* TODO try using purely functional state *)
+    try action () with
+    | effect Get k -> continue k !value
+    | effect (Set v) k -> value := v; continue k ()                
+end
+                                    
+let testStreams = begin
+  let e1 = Ev (0, (1,1)) in
+  let e2 = Ev (2, (2,2)) in 
+  let e3 = Ev (4, (3,3)) in 
+  let e4 = Ev (6, (4,4)) in 
+  let s1 = toReact([e1; e2; e3; e4]) in
 
+  let e5 = Ev ("1", (5,5)) in
+  let e6 = Ev ("3", (6,6)) in
+  let e7 = Ev ("5", (7,7)) in
+  let e8 = Ev ("7", (8,8)) in
+  let s2 = toReact([e5; e6; e7; e8]) in
+  (s1,s2)
+  end
+
+                    
+let globalContext show action = ManyWorlds.handler show action
+
+(*TODO do we really need SingleWorld at all?*)                              
+let correlate (type a) (pattern: unit -> a) =
+  let module S = SingleWorld(struct type t = a end) in
+  S.handler pattern
+
+(* let forAll i action =
+ *   try action () with
+ *   | effect i.Push x k ->
+ *      i.setMail ((initState x) :: i.getMail);
+ *      continue k (i.push x)   *)
+
+    
