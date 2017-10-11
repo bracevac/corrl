@@ -194,7 +194,7 @@ end
 (* A slot x represents a binding 'x from ...' inside of a correlate block.
    Each binding has specific effects attached to it (generative effects).
    *)                              
-module type SLOT = sig
+module type Slot = sig
   (* The type of event values this slot binds *)
   type elem
   (* Push event notification *)       
@@ -208,7 +208,7 @@ module type SLOT = sig
   val setMail: elem list -> unit  
 end
 
-module Slot(T: SomeT): SLOT = struct
+module Slot(T: SomeT): Slot = struct
   type elem = T.t
   effect Push: elem -> unit
   let push v = perform (Push v)
@@ -217,8 +217,9 @@ module Slot(T: SomeT): SLOT = struct
   effect SetMail: elem list -> unit
   let setMail l = perform (SetMail l)
 end
-                 
-let rec jnState (slots: (module SLOT) list) =
+
+(* Create a handler for the ambient mailbox state *)                            
+let rec jnState (slots: (module Slot) list) =
   begin match slots with
   | [] -> fun action -> action ()
   | s::ss ->
@@ -258,12 +259,13 @@ let correlate (type a) (pattern: unit -> a) =
   S.handler pattern
 
 
-    
-(* let forAll (module I) action =
- *   try action () with
- *   | effect I.Push x k ->
- *      I.set ((initState x) :: I.get);
- *      continue k (I.push x) *)
+let forAll (x: (module Slot)) action =
+  let module X = (val x) in
+  let initState x = x in (*TODO*)
+  try action () with
+  | effect (X.Push x) k ->
+     X.setMail ((initState x) :: (X.getMail ()));
+     continue k (X.push x)
        
     
     
