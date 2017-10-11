@@ -200,21 +200,21 @@ module type Slot = sig
   (* Push event notification *)       
   effect Push: elem -> unit
   val push: elem -> unit
-  (* Retrieve mailbox state *)                      
-  effect GetMail: elem list
-  val getMail: unit -> elem list
+  (* Retrieve mailbox state, mail is ref-counted *)                      
+  effect GetMail: (elem * int) list
+  val getMail: unit -> (elem * int) list
   (* Set mailbox state *)                         
-  effect SetMail: elem list -> unit
-  val setMail: elem list -> unit  
+  effect SetMail: (elem * int) list -> unit
+  val setMail: (elem * int) list -> unit  
 end
 
 module Slot(T: SomeT): Slot = struct
   type elem = T.t
   effect Push: elem -> unit
   let push v = perform (Push v)
-  effect GetMail: elem list
+  effect GetMail: (elem * int) list
   let getMail () = perform GetMail                     
-  effect SetMail: elem list -> unit
+  effect SetMail: (elem * int) list -> unit
   let setMail l = perform (SetMail l)
 end
 
@@ -224,7 +224,7 @@ let rec jnState (slots: (module Slot) list) =
   | [] -> fun action -> action ()
   | s::ss ->
      let module X = (val s) in
-     let mbox: X.elem list ref = ref [] in (* TODO avoid mutability *)                        
+     let mbox: (X.elem * int) list ref = ref [] in (* TODO avoid mutability *)                        
      let f = jnState ss in
 
      fun action ->
@@ -232,9 +232,22 @@ let rec jnState (slots: (module Slot) list) =
            | effect X.GetMail k -> continue k !mbox
            | effect (X.SetMail l) k -> mbox := l; continue k ()                                                       
      end                             
-  end
-                 
+  end                 
                        
+let globalContext show action = ManyWorlds.handler show action
+
+(*TODO do we really need SingleWorld at all?*)                              
+let correlate (type a) (pattern: unit -> a) =
+  let module S = SingleWorld(struct type t = a end) in
+  S.handler pattern
+
+let forAll (x: (module Slot)) action =
+  let module X = (val x) in
+  try action () with
+  | effect (X.Push x) k ->
+     X.setMail ((x,0) :: (X.getMail ()));
+     continue k (X.push x)
+       
 let testStreams = begin
   let e1 = Ev (0, (1,1)) in
   let e2 = Ev (2, (2,2)) in 
@@ -249,23 +262,5 @@ let testStreams = begin
   let s2 = toReact([e5; e6; e7; e8]) in
   (s1,s2)
   end
-
-                    
-let globalContext show action = ManyWorlds.handler show action
-
-(*TODO do we really need SingleWorld at all?*)                              
-let correlate (type a) (pattern: unit -> a) =
-  let module S = SingleWorld(struct type t = a end) in
-  S.handler pattern
-
-
-let forAll (x: (module Slot)) action =
-  let module X = (val x) in
-  let initState x = x in (*TODO*)
-  try action () with
-  | effect (X.Push x) k ->
-     X.setMail ((initState x) :: (X.getMail ()));
-     continue k (X.push x)
-       
     
     
