@@ -171,7 +171,13 @@ module Callback(T: SomeT): Callback = struct
   let push v = perform (Push v)       
 end
 
-module State(T: SomeT) = struct
+module type State = sig
+  type state
+  val get: unit -> state
+  val set: state -> unit  
+end                  
+                                    
+module State(T: SomeT): State = struct
   type state = T.t
   effect Get: state
   effect Set: state -> unit
@@ -184,7 +190,50 @@ module State(T: SomeT) = struct
     | effect Get k -> continue k !value
     | effect (Set v) k -> value := v; continue k ()                
 end
-                                    
+
+(* A slot x represents a binding 'x from ...' inside of a correlate block.
+   Each binding has specific effects attached to it (generative effects).
+   *)                              
+module type SLOT = sig
+  (* The type of event values this slot binds *)
+  type elem
+  (* Push event notification *)       
+  effect Push: elem -> unit
+  val push: elem -> unit
+  (* Retrieve mailbox state *)                      
+  effect GetMail: elem list
+  val getMail: unit -> elem list
+  (* Set mailbox state *)                         
+  effect SetMail: elem list -> unit
+  val setMail: elem list -> unit  
+end
+
+module Slot(T: SomeT): SLOT = struct
+  type elem = T.t
+  effect Push: elem -> unit
+  let push v = perform (Push v)
+  effect GetMail: elem list
+  let getMail () = perform GetMail                     
+  effect SetMail: elem list -> unit
+  let setMail l = perform (SetMail l)
+end
+                 
+let rec jnState (slots: (module SLOT) list) =
+  begin match slots with
+  | [] -> fun action -> action ()
+  | s::ss ->
+     let module X = (val s) in
+     let mbox: X.elem list ref = ref [] in (* TODO avoid mutability *)                        
+     let f = jnState ss in
+
+     fun action ->
+     begin try (f action) with
+           | effect X.GetMail k -> continue k !mbox
+           | effect (X.SetMail l) k -> mbox := l; continue k ()                                                       
+     end                             
+  end
+                 
+                       
 let testStreams = begin
   let e1 = Ev (0, (1,1)) in
   let e2 = Ev (2, (2,2)) in 
@@ -208,10 +257,13 @@ let correlate (type a) (pattern: unit -> a) =
   let module S = SingleWorld(struct type t = a end) in
   S.handler pattern
 
-(* let forAll i action =
- *   try action () with
- *   | effect i.Push x k ->
- *      i.setMail ((initState x) :: i.getMail);
- *      continue k (i.push x)   *)
 
+    
+(* let forAll (module I) action =
+ *   try action () with
+ *   | effect I.Push x k ->
+ *      I.set ((initState x) :: I.get);
+ *      continue k (I.push x) *)
+       
+    
     
