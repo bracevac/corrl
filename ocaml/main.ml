@@ -160,37 +160,6 @@ module Output(T: SomeT) = struct
   effect Out: t -> unit
 end
 
-module type Callback = sig
-  type elem
-  val push : elem -> unit     
-end
-                     
-module Callback(T: SomeT): Callback = struct
-  type elem = T.t
-  effect Push: elem -> unit
-  let push v = perform (Push v)       
-end
-
-module type State = sig
-  type state
-  val get: unit -> state
-  val set: state -> unit  
-end                  
-                                    
-module State(T: SomeT): State = struct
-  type state = T.t
-  effect Get: state
-  effect Set: state -> unit
-  let get () = perform Get
-  let set v = perform (Set v)
-                        
-  let handler (init: state) action =
-    let value = ref init in (* TODO try using purely functional state *)
-    try action () with
-    | effect Get k -> continue k !value
-    | effect (Set v) k -> value := v; continue k ()                
-end
-
 (* A slot x represents a binding 'x from ...' inside of a correlate block.
    Each binding has specific effects attached to it (generative effects).
    *)                              
@@ -218,22 +187,28 @@ module Slot(T: SomeT): Slot = struct
   let setMail l = perform (SetMail l)
 end
 
-(* Create a handler for the ambient mailbox state *)                            
-let rec jnState (slots: (module Slot) list) =
-  begin match slots with
-  | [] -> fun action -> action ()
-  | s::ss ->
-     let module X = (val s) in
-     let mbox: (X.elem * int) list ref = ref [] in (* TODO avoid mutability *)                        
-     let f = jnState ss in
+type slots = (module Slot) array
 
-     fun action ->
-     begin try (f action) with
-           | effect X.GetMail k -> continue k !mbox
-           | effect (X.SetMail l) k -> mbox := l; continue k ()                                                       
-     end                             
-  end                 
-                       
+(* TODO make a join module *)           
+(* let mkJoin (type res) (ss: slots) = (module struct
+ *   type result = res
+ *   let slots = ss               
+ * end) *)
+           
+(* Create a handler for the ambient mailbox state *)                            
+let rec jnState (slots: slots) =
+  let wrap thunk (slot: (module Slot)) =
+    begin
+      let module X = (val slot) in
+      let mbox: (X.elem * int) list ref = ref [] in (* TODO avoid mutability *)                        
+      fun action ->
+      begin try (thunk action) with
+            | effect X.GetMail k -> continue k !mbox
+            | effect (X.SetMail l) k -> mbox := l; continue k ()                                                       
+      end
+    end in
+  Array.fold_left wrap (fun action -> action ()) slots  
+  
 let globalContext show action = ManyWorlds.handler show action
 
 (*TODO do we really need SingleWorld at all?*)                              
@@ -241,13 +216,56 @@ let correlate (type a) (pattern: unit -> a) =
   let module S = SingleWorld(struct type t = a end) in
   S.handler pattern
 
+let forkEach x = () (*TODO*)
+  
+let focus elem list =
+  let rec helper accum list =
+    begin match list with
+    | [] -> (accum, [])
+    | x::xs -> if elem == x then (accum, xs) else (helper (x :: accum) xs)
+    end
+  in helper [] list
+
+(* Implements the cartesian semantics. *)   
+let assemble (slots: slots) =
+  let inc_refcount count (slot: (module Slot)) =
+    begin
+      let module X = (val slot) in
+      X.setMail (List.map (fun (y,c) -> count := !count + 1; (y,c+1)) (X.getMail ()))
+    end in
+  let thunk = ref (fun action -> action ()) in
+  let wrap i (s: (module Slot)) =
+    begin
+      let module X = (val s) in
+      let body = !thunk in
+      thunk := fun action ->
+               begin try (body action) with
+                     | effect (X.Push v) k ->
+                        let count = ref 0 in
+                        let update k s =
+                          if not (k == i) then
+                            inc_refcount count slots.(k)
+                          else () in
+                        let inc n ((y,c) as p) =
+                          if y == v then (y, c + n) else p in                        
+                        Array.iteri update slots;
+                        let n = !count in
+                        X.setMail (List.map (inc n) (X.getMail ())); (* TODO inefficient *)
+                        (* TODO finish *)
+                        (* we do not return back *)
+               end
+    end
+  in Array.iteri wrap slots
+  
 let forAll (x: (module Slot)) action =
   let module X = (val x) in
   try action () with
   | effect (X.Push x) k ->
      X.setMail ((x,0) :: (X.getMail ()));
      continue k (X.push x)
-       
+
+
+     
 let testStreams = begin
   let e1 = Ev (0, (1,1)) in
   let e2 = Ev (2, (2,2)) in 
