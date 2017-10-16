@@ -155,60 +155,386 @@ module ManyWorlds = struct
   let handler onDone action = run onDone (ref []) action     
 end
 
-module Output(T: SomeT) = struct
-  type t = T.t
-  effect Out: t -> unit
-end
-
 (* A slot x represents a binding 'x from ...' inside of a correlate block.
    Each binding has specific effects attached to it (generative effects).
    *)                              
 module type Slot = sig
   (* The type of event values this slot binds *)
-  type elem
+  type t
   (* Push event notification *)       
-  effect Push: elem -> unit
-  val push: elem -> unit
+  effect Push: t -> unit
+  val push: t -> unit
   (* Retrieve mailbox state, mail is ref-counted *)                      
-  effect GetMail: (elem * int) list
-  val getMail: unit -> (elem * int) list
+  effect GetMail: (t * int) list
+  val getMail: unit -> (t * int) list
   (* Set mailbox state *)                         
-  effect SetMail: (elem * int) list -> unit
-  val setMail: (elem * int) list -> unit  
+  effect SetMail: (t * int) list -> unit
+  val setMail: (t * int) list -> unit  
 end
 
 module Slot(T: SomeT): Slot = struct
-  type elem = T.t
-  effect Push: elem -> unit
+  type t = T.t
+  effect Push: t -> unit
   let push v = perform (Push v)
-  effect GetMail: (elem * int) list
+  effect GetMail: (t * int) list
   let getMail () = perform GetMail                     
-  effect SetMail: (elem * int) list -> unit
+  effect SetMail: (t * int) list -> unit
   let setMail l = perform (SetMail l)
 end
 
 type slots = (module Slot) array
-
-(* TODO make a join module *)           
-(* let mkJoin (type res) (ss: slots) = (module struct
- *   type result = res
- *   let slots = ss               
- * end) *)
-           
-(* Create a handler for the ambient mailbox state *)                            
-let rec jnState (slots: slots) =
-  let wrap thunk (slot: (module Slot)) =
-    begin
-      let module X = (val slot) in
-      let mbox: (X.elem * int) list ref = ref [] in (* TODO avoid mutability *)                        
-      fun action ->
-      begin try (thunk action) with
-            | effect X.GetMail k -> continue k !mbox
-            | effect (X.SetMail l) k -> mbox := l; continue k ()                                                       
-      end
-    end in
-  Array.fold_left wrap (fun action -> action ()) slots  
   
+let rec forkEach f = function
+  | [] -> ()
+  | x::xs -> if (ManyWorlds.fork ()) then (f x) else (forkEach f xs)
+
+let flatMap f l = List.concat (List.map f l)               
+
+let rec update_first p f = function
+  | [] -> []
+  | x::xs ->
+     if (p x)
+     then (f x) :: xs
+     else x :: (update_first p f xs)       
+
+let inc_snd n l = List.map (fun (y,c) -> (y,c+n)) l    
+                
+(*lame! can we have a nice arity-abstracting join definition for any n?*)                
+module Join4(T: sig type t0 type t1 type t2 type t3 end) = struct
+  module S0 = Slot(struct type t = T.t0 end)
+  module S1 = Slot(struct type t = T.t1 end)
+  module S2 = Slot(struct type t = T.t2 end)
+  module S3 = Slot(struct type t = T.t3 end)            
+  type result = S0.t * S1.t * S2.t * S3.t
+  let slots: slots = [|(module S0);(module S1);(module S2);(module S3)|]                          
+  effect Trigger: result -> unit
+  let trigger v = perform (Trigger v)
+
+  module Aux = struct
+    let _cart f thnk1 thnk2 thnk3 x =
+      flatMap
+        (fun y ->
+          flatMap
+            (fun z ->
+              List.map (fun w -> f (x,y,z,w))
+                (thnk3 ())) 
+            (thnk2 ()))
+        (thnk1 ())
+
+    let shuffle0 p = p                 
+    let shuffle1 (x,y,z,w) = (y,x,z,w)
+    let shuffle2 (x,y,z,w) = (y,z,x,w)
+    let shuffle3 (x,y,z,w) = (y,z,w,x)
+
+    (* mailbox_i, without the refcounts *)                       
+    let mail0 () = List.map fst (S0.getMail())
+    let mail1 () = List.map fst (S1.getMail())
+    let mail2 () = List.map fst (S2.getMail())
+    let mail3 () = List.map fst (S3.getMail())
+                    
+    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
+    let refcounts0 () =
+      (List.length (S1.getMail ())) + (List.length (S2.getMail())) + (List.length (S3.getMail ()))
+    let refcounts1 () =
+      (List.length (S0.getMail ())) + (List.length (S2.getMail())) + (List.length (S3.getMail ()))
+    let refcounts2 () =
+      (List.length (S0.getMail ())) + (List.length (S1.getMail())) + (List.length (S3.getMail ()))      
+    let refcounts3 () =
+      (List.length (S0.getMail ())) + (List.length (S1.getMail())) + (List.length (S2.getMail ()))
+    (* The effect of a S_i.Push x on each mailbox_k *)              
+    let inc_refcounts0 x = 
+      S1.setMail ((inc_snd 1) (S1.getMail()));
+      S2.setMail ((inc_snd 1) (S2.getMail()));
+      S3.setMail ((inc_snd 1) (S3.getMail()));
+      S0.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts0 ())))
+                    (S0.getMail ()))
+    let inc_refcounts1 x =
+      S0.setMail ((inc_snd 1) (S0.getMail()));
+      S2.setMail ((inc_snd 1) (S2.getMail()));
+      S3.setMail ((inc_snd 1) (S3.getMail()));
+      S1.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts1 ())))
+                    (S1.getMail ()))
+    let inc_refcounts2 x =
+      S0.setMail ((inc_snd 1) (S0.getMail()));
+      S1.setMail ((inc_snd 1) (S1.getMail()));
+      S3.setMail ((inc_snd 1) (S3.getMail()));
+      S2.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts2 ())))
+                    (S2.getMail ()))
+    let inc_refcounts3 x =
+      S0.setMail ((inc_snd 1) (S0.getMail()));
+      S1.setMail ((inc_snd 1) (S1.getMail()));
+      S2.setMail ((inc_snd 1) (S2.getMail()));
+      S3.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts3 ())))
+                    (S3.getMail ()))
+  end
+  open Aux           
+
+  (* We stage for each slot S_i a function cartesian_i, 
+     which takes an event notification x of type S_i.t and computes 
+     the cross-product of x and the contents of the mailboxes for the remaining
+     slots S_k, where k =/= i. The typical use case is interpreting the
+     S_i.Push effect: Compute the collection cartesian_i and pass its 
+     elements to the Complete effect, i.e., trigger the pattern body. *)           
+  let cartesian0: S0.t -> result list =
+    (_cart shuffle0 mail1 mail2 mail3)
+  let cartesian1: S1.t -> result list =
+    (_cart shuffle1 mail0 mail2 mail3)
+  let cartesian2: S2.t -> result list =
+    (_cart shuffle2 mail0 mail1 mail3)
+  let cartesian3: S3.t -> result list =
+    (_cart shuffle3 mail0 mail1 mail2)
+
+  (* The final stage in the handler stack, implementing the cartesian semantics *)  
+  let assemble action =
+    try action () with
+    | effect (S0.Push v) _ ->
+       inc_refcounts0 v;
+       forkEach trigger (cartesian0 v)       
+    | effect (S1.Push v) _ ->
+       inc_refcounts1 v;
+       forkEach trigger (cartesian1 v)
+    | effect (S2.Push v) _ ->
+       inc_refcounts2 v;
+       forkEach trigger (cartesian2 v)       
+    | effect (S3.Push v) _ ->
+       inc_refcounts3 v;
+       forkEach trigger (cartesian3 v)
+
+  (* Handler for the ambient mailbox state *)                            
+  let ambientState action =
+    let mbox0: (S0.t * int) list ref = ref [] in
+    let mbox1: (S1.t * int) list ref = ref [] in
+    let mbox2: (S2.t * int) list ref = ref [] in
+    let mbox3: (S3.t * int) list ref = ref [] in    
+    try action () with
+    | effect S0.GetMail k -> continue k !mbox0
+    | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
+    | effect S1.GetMail k -> continue k !mbox1
+    | effect (S1.SetMail l) k -> mbox1 := l; continue k ()
+    | effect S2.GetMail k -> continue k !mbox2
+    | effect (S2.SetMail l) k -> mbox2 := l; continue k ()                                                       
+    | effect S3.GetMail k -> continue k !mbox3
+    | effect (S3.SetMail l) k -> mbox3 := l; continue k ()                                                       
+end
+
+module Join3(T: sig type t0 type t1 type t2 end) = struct
+  module S0 = Slot(struct type t = T.t0 end)
+  module S1 = Slot(struct type t = T.t1 end)
+  module S2 = Slot(struct type t = T.t2 end)
+  type result = S0.t * S1.t * S2.t
+  let slots: slots = [|(module S0);(module S1);(module S2)|]                          
+  effect Trigger: result -> unit
+  let trigger v = perform (Trigger v)
+
+  module Aux = struct
+    let _cart f thnk1 thnk2 x =
+      flatMap
+        (fun y ->
+          List.map (fun z -> f (x,y,z))
+            (thnk2 ())) 
+        (thnk1 ())
+  
+
+    let shuffle0 p = p                 
+    let shuffle1 (x,y,z) = (y,x,z)
+    let shuffle2 (x,y,z) = (y,z,x)
+
+    (* mailbox_i, without the refcounts *)                       
+    let mail0 () = List.map fst (S0.getMail())
+    let mail1 () = List.map fst (S1.getMail())
+    let mail2 () = List.map fst (S2.getMail())
+                    
+    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
+    let refcounts0 () =
+      (List.length (S1.getMail ())) + (List.length (S2.getMail())) 
+    let refcounts1 () =
+      (List.length (S0.getMail ())) + (List.length (S2.getMail()))  
+    let refcounts2 () =
+      (List.length (S0.getMail ())) + (List.length (S1.getMail()))        
+    (* The effect of a S_i.Push x on each mailbox_k *)              
+    let inc_refcounts0 x = 
+      S1.setMail ((inc_snd 1) (S1.getMail()));
+      S2.setMail ((inc_snd 1) (S2.getMail()));
+      S0.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts0 ())))
+                    (S0.getMail ()))
+    let inc_refcounts1 x =
+      S0.setMail ((inc_snd 1) (S0.getMail()));
+      S2.setMail ((inc_snd 1) (S2.getMail()));
+      S1.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts1 ())))
+                    (S1.getMail ()))
+    let inc_refcounts2 x =
+      S0.setMail ((inc_snd 1) (S0.getMail()));
+      S1.setMail ((inc_snd 1) (S1.getMail()));
+      S2.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts2 ())))
+                    (S2.getMail ()))
+  end
+  open Aux           
+
+  (* We stage for each slot S_i a function cartesian_i, 
+     which takes an event notification x of type S_i.t and computes 
+     the cross-product of x and the contents of the mailboxes for the remaining
+     slots S_k, where k =/= i. The typical use case is interpreting the
+     S_i.Push effect: Compute the collection cartesian_i and pass its 
+     elements to the Complete effect, i.e., trigger the pattern body. *)           
+  let cartesian0: S0.t -> result list =
+    (_cart shuffle0 mail1 mail2)
+  let cartesian1: S1.t -> result list =
+    (_cart shuffle1 mail0 mail2)
+  let cartesian2: S2.t -> result list =
+    (_cart shuffle2 mail0 mail1)
+
+  (* The final stage in the handler stack, implementing the cartesian semantics *)  
+  let assemble action =
+    try action () with
+    | effect (S0.Push v) _ ->
+       inc_refcounts0 v;
+       forkEach trigger (cartesian0 v)       
+    | effect (S1.Push v) _ ->
+       inc_refcounts1 v;
+       forkEach trigger (cartesian1 v)
+    | effect (S2.Push v) _ ->
+       inc_refcounts2 v;
+       forkEach trigger (cartesian2 v)       
+
+  (* Handler for the ambient mailbox state *)                            
+  let ambientState action =
+    let mbox0: (S0.t * int) list ref = ref [] in
+    let mbox1: (S1.t * int) list ref = ref [] in
+    let mbox2: (S2.t * int) list ref = ref [] in
+    try action () with
+    | effect S0.GetMail k -> continue k !mbox0
+    | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
+    | effect S1.GetMail k -> continue k !mbox1
+    | effect (S1.SetMail l) k -> mbox1 := l; continue k ()
+    | effect S2.GetMail k -> continue k !mbox2
+    | effect (S2.SetMail l) k -> mbox2 := l; continue k ()                                                       
+end
+
+module Join2(T: sig type t0 type t1 end) = struct
+  module S0 = Slot(struct type t = T.t0 end)
+  module S1 = Slot(struct type t = T.t1 end)
+  type result = S0.t * S1.t
+  let slots: slots = [|(module S0);(module S1)|]                          
+  effect Trigger: result -> unit
+  let trigger v = perform (Trigger v)
+
+  module Aux = struct
+    let _cart f thnk1 x =
+      List.map
+        (fun y -> f (x,y))        
+        (thnk1 ())  
+
+    let shuffle0 p = p                 
+    let shuffle1 (x,y) = (y,x)
+
+    (* mailbox_i, without the refcounts *)                       
+    let mail0 () = List.map fst (S0.getMail())
+    let mail1 () = List.map fst (S1.getMail())
+                    
+    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
+    let refcounts0 () =
+      (List.length (S1.getMail ())) 
+    let refcounts1 () =
+      (List.length (S0.getMail ())) 
+    (* The effect of a S_i.Push x on each mailbox_k *)              
+    let inc_refcounts0 x = 
+      S1.setMail ((inc_snd 1) (S1.getMail()));
+      S0.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts0 ())))
+                    (S0.getMail ()))
+    let inc_refcounts1 x =
+      S0.setMail ((inc_snd 1) (S0.getMail()));
+      S1.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts1 ())))
+                    (S1.getMail ()))
+  end
+  open Aux           
+
+  (* We stage for each slot S_i a function cartesian_i, 
+     which takes an event notification x of type S_i.t and computes 
+     the cross-product of x and the contents of the mailboxes for the remaining
+     slots S_k, where k =/= i. The typical use case is interpreting the
+     S_i.Push effect: Compute the collection cartesian_i and pass its 
+     elements to the Complete effect, i.e., trigger the pattern body. *)           
+  let cartesian0: S0.t -> result list =
+    (_cart shuffle0 mail1)
+  let cartesian1: S1.t -> result list =
+    (_cart shuffle1 mail0)
+
+  (* The final stage in the handler stack, implementing the cartesian semantics *)  
+  let assemble action =
+    try action () with
+    | effect (S0.Push v) _ ->
+       inc_refcounts0 v;
+       forkEach trigger (cartesian0 v)       
+    | effect (S1.Push v) _ ->
+       inc_refcounts1 v;
+       forkEach trigger (cartesian1 v)
+
+  (* Handler for the ambient mailbox state *)                            
+  let ambientState action =
+    let mbox0: (S0.t * int) list ref = ref [] in
+    let mbox1: (S1.t * int) list ref = ref [] in
+    try action () with
+    | effect S0.GetMail k -> continue k !mbox0
+    | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
+    | effect S1.GetMail k -> continue k !mbox1
+    | effect (S1.SetMail l) k -> mbox1 := l; continue k ()
+end
+
+module Join1(T: sig type t0 end) = struct
+  module S0 = Slot(struct type t = T.t0 end)
+  type result = S0.t
+  let slots: slots = [|(module S0)|]                          
+  effect Trigger: result -> unit
+  let trigger v = perform (Trigger v)
+
+  module Aux = struct
+    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
+    let refcounts0 () = 1
+    (* The effect of a S_i.Push x on each mailbox_k *)              
+    let inc_refcounts0 x = 
+      S0.setMail (update_first
+                    (fun (y,_) -> y == x)
+                    (fun (x,c) -> (x,c+(refcounts0 ())))
+                    (S0.getMail ()))
+  end
+  open Aux           
+
+  let cartesian0: S0.t -> result list = (fun x -> [x])
+
+  (* The final stage in the handler stack, implementing the cartesian semantics *)  
+  let assemble action =
+    try action () with
+    | effect (S0.Push v) _ ->
+       inc_refcounts0 v;
+       forkEach trigger (cartesian0 v)       
+
+  (* Handler for the ambient mailbox state *)                            
+  let ambientState action =
+    let mbox0: (S0.t * int) list ref = ref [] in
+    try action () with
+    | effect S0.GetMail k -> continue k !mbox0
+    | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
+end
+                                         
+                                        
 let globalContext show action = ManyWorlds.handler show action
 
 (*TODO do we really need SingleWorld at all?*)                              
@@ -216,47 +542,7 @@ let correlate (type a) (pattern: unit -> a) =
   let module S = SingleWorld(struct type t = a end) in
   S.handler pattern
 
-let forkEach x = () (*TODO*)
-  
-let focus elem list =
-  let rec helper accum list =
-    begin match list with
-    | [] -> (accum, [])
-    | x::xs -> if elem == x then (accum, xs) else (helper (x :: accum) xs)
-    end
-  in helper [] list
-
-(* Implements the cartesian semantics. *)   
-let assemble (slots: slots) =
-  let inc_refcount count (slot: (module Slot)) =
-    begin
-      let module X = (val slot) in
-      X.setMail (List.map (fun (y,c) -> count := !count + 1; (y,c+1)) (X.getMail ()))
-    end in
-  let thunk = ref (fun action -> action ()) in
-  let wrap i (s: (module Slot)) =
-    begin
-      let module X = (val s) in
-      let body = !thunk in
-      thunk := fun action ->
-               begin try (body action) with
-                     | effect (X.Push v) k ->
-                        let count = ref 0 in
-                        let update k s =
-                          if not (k == i) then
-                            inc_refcount count slots.(k)
-                          else () in
-                        let inc n ((y,c) as p) =
-                          if y == v then (y, c + n) else p in                        
-                        Array.iteri update slots;
-                        let n = !count in
-                        X.setMail (List.map (inc n) (X.getMail ())); (* TODO inefficient *)
-                        (* TODO finish *)
-                        (* we do not return back *)
-               end
-    end
-  in Array.iteri wrap slots
-  
+   
 let forAll (x: (module Slot)) action =
   let module X = (val x) in
   try action () with
@@ -264,8 +550,6 @@ let forAll (x: (module Slot)) action =
      X.setMail ((x,0) :: (X.getMail ()));
      continue k (X.push x)
 
-
-     
 let testStreams = begin
   let e1 = Ev (0, (1,1)) in
   let e2 = Ev (2, (2,2)) in 
