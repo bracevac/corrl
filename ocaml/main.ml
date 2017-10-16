@@ -234,13 +234,13 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end) = struct
                     
     (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
     let refcounts0 () =
-      (List.length (S1.getMail ())) + (List.length (S2.getMail())) + (List.length (S3.getMail ()))
+      (List.length (S1.getMail ())) * (List.length (S2.getMail())) * (List.length (S3.getMail ()))
     let refcounts1 () =
-      (List.length (S0.getMail ())) + (List.length (S2.getMail())) + (List.length (S3.getMail ()))
+      (List.length (S0.getMail ())) * (List.length (S2.getMail())) * (List.length (S3.getMail ()))
     let refcounts2 () =
-      (List.length (S0.getMail ())) + (List.length (S1.getMail())) + (List.length (S3.getMail ()))      
+      (List.length (S0.getMail ())) * (List.length (S1.getMail())) * (List.length (S3.getMail ()))      
     let refcounts3 () =
-      (List.length (S0.getMail ())) + (List.length (S1.getMail())) + (List.length (S2.getMail ()))
+      (List.length (S0.getMail ())) * (List.length (S1.getMail())) * (List.length (S2.getMail ()))
     (* The effect of a S_i.Push x on each mailbox_k *)              
     let inc_refcounts0 x = 
       S1.setMail ((inc_snd 1) (S1.getMail()));
@@ -354,11 +354,11 @@ module Join3(T: sig type t0 type t1 type t2 end) = struct
                     
     (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
     let refcounts0 () =
-      (List.length (S1.getMail ())) + (List.length (S2.getMail())) 
+      (List.length (S1.getMail ())) * (List.length (S2.getMail())) 
     let refcounts1 () =
-      (List.length (S0.getMail ())) + (List.length (S2.getMail()))  
+      (List.length (S0.getMail ())) * (List.length (S2.getMail()))  
     let refcounts2 () =
-      (List.length (S0.getMail ())) + (List.length (S1.getMail()))        
+      (List.length (S0.getMail ())) * (List.length (S1.getMail()))        
     (* The effect of a S_i.Push x on each mailbox_k *)              
     let inc_refcounts0 x = 
       S1.setMail ((inc_snd 1) (S1.getMail()));
