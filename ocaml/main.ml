@@ -198,9 +198,20 @@ let rec update_first p f = function
      else x :: (update_first p f xs)       
 
 let inc_snd n l = List.map (fun (y,c) -> (y,c+n)) l    
+
+module type Join = sig
+  type result
+  val slots: slots
+  effect Trigger: result -> unit
+  val trigger: result -> unit
+  effect SetCont: (result, unit) continuation -> unit  
+  val setCont: (result, unit) continuation -> unit
+  val assemble: (unit -> unit) -> unit
+  val ambientState: (unit -> unit) -> unit
+end
                 
 (*lame! can we have a nice arity-abstracting join definition for any n?*)                
-module Join4(T: sig type t0 type t1 type t2 type t3 end) = struct
+module Join4(T: sig type t0 type t1 type t2 type t3 end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   module S1 = Slot(struct type t = T.t1 end)
   module S2 = Slot(struct type t = T.t2 end)
@@ -336,7 +347,7 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end) = struct
     | effect (S3.SetMail l) k -> mbox3 := l; continue k ()                                                       
 end
 
-module Join3(T: sig type t0 type t1 type t2 end) = struct
+module Join3(T: sig type t0 type t1 type t2 end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   module S1 = Slot(struct type t = T.t1 end)
   module S2 = Slot(struct type t = T.t2 end)
@@ -446,7 +457,7 @@ module Join3(T: sig type t0 type t1 type t2 end) = struct
     | effect (S2.SetMail l) k -> mbox2 := l; continue k ()                                 
 end
 
-module Join2(T: sig type t0 type t1 end) = struct
+module Join2(T: sig type t0 type t1 end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   module S1 = Slot(struct type t = T.t1 end)
   type result = S0.t * S1.t
@@ -531,7 +542,7 @@ module Join2(T: sig type t0 type t1 end) = struct
     | effect (S1.SetMail l) k -> mbox1 := l; continue k ()
 end
 
-module Join1(T: sig type t0 end) = struct
+module Join1(T: sig type t0 end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   type result = S0.t
   let slots: slots = [|(module S0)|]                          
