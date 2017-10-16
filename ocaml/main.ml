@@ -209,7 +209,9 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end) = struct
   let slots: slots = [|(module S0);(module S1);(module S2);(module S3)|]                          
   effect Trigger: result -> unit
   let trigger v = perform (Trigger v)
-
+  effect SetCont: (result, unit) continuation -> unit
+  let setCont c = perform (SetCont c)
+                
   module Aux = struct
     let _cart f thnk1 thnk2 thnk3 x =
       flatMap
@@ -309,12 +311,21 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end) = struct
        forkEach trigger (cartesian3 v)
 
   (* Handler for the ambient mailbox state *)                            
-  let ambientState action =
-    let mbox0: (S0.t * int) list ref = ref [] in
+  let ambientState (action: unit -> unit) =
+    let mbox0: (S0.t * int) list ref = ref [] in (* TODO avoid mutability *)
     let mbox1: (S1.t * int) list ref = ref [] in
     let mbox2: (S2.t * int) list ref = ref [] in
-    let mbox3: (S3.t * int) list ref = ref [] in    
+    let mbox3: (S3.t * int) list ref = ref [] in
+    let cont: (result, unit) continuation option ref = ref None in
     try action () with
+    | effect (SetCont c) k -> cont := Some c; continue k ()
+    | effect (Trigger res) k -> 
+       match !cont with
+       | Some c ->
+          (*TODO need to investigate: how to avoid clone_continuation invocations *)
+          cont := Some (Obj.clone_continuation c); 
+          continue c res
+       | None -> failwith "uninitialized join continuation"          
     | effect S0.GetMail k -> continue k !mbox0
     | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
     | effect S1.GetMail k -> continue k !mbox1
@@ -333,7 +344,9 @@ module Join3(T: sig type t0 type t1 type t2 end) = struct
   let slots: slots = [|(module S0);(module S1);(module S2)|]                          
   effect Trigger: result -> unit
   let trigger v = perform (Trigger v)
-
+  effect SetCont: (result, unit) continuation -> unit
+  let setCont c = perform (SetCont c)
+                
   module Aux = struct
     let _cart f thnk1 thnk2 x =
       flatMap
@@ -415,13 +428,22 @@ module Join3(T: sig type t0 type t1 type t2 end) = struct
     let mbox0: (S0.t * int) list ref = ref [] in
     let mbox1: (S1.t * int) list ref = ref [] in
     let mbox2: (S2.t * int) list ref = ref [] in
+    let cont: (result, unit) continuation option ref = ref None in
     try action () with
+    | effect (SetCont c) k -> cont := Some c; continue k ()
+    | effect (Trigger res) k -> 
+       match !cont with
+       | Some c ->
+          (*TODO need to investigate: how to avoid clone_continuation invocations *)
+          cont := Some (Obj.clone_continuation c); 
+          continue c res
+       | None -> failwith "uninitialized join continuation"          
     | effect S0.GetMail k -> continue k !mbox0
     | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
     | effect S1.GetMail k -> continue k !mbox1
     | effect (S1.SetMail l) k -> mbox1 := l; continue k ()
     | effect S2.GetMail k -> continue k !mbox2
-    | effect (S2.SetMail l) k -> mbox2 := l; continue k ()                                                       
+    | effect (S2.SetMail l) k -> mbox2 := l; continue k ()                                 
 end
 
 module Join2(T: sig type t0 type t1 end) = struct
@@ -431,6 +453,8 @@ module Join2(T: sig type t0 type t1 end) = struct
   let slots: slots = [|(module S0);(module S1)|]                          
   effect Trigger: result -> unit
   let trigger v = perform (Trigger v)
+  effect SetCont: (result, unit) continuation -> unit
+  let setCont c = perform (SetCont c)
 
   module Aux = struct
     let _cart f thnk1 x =
@@ -491,7 +515,16 @@ module Join2(T: sig type t0 type t1 end) = struct
   let ambientState action =
     let mbox0: (S0.t * int) list ref = ref [] in
     let mbox1: (S1.t * int) list ref = ref [] in
+    let cont: (result, unit) continuation option ref = ref None in
     try action () with
+    | effect (SetCont c) k -> cont := Some c; continue k ()
+    | effect (Trigger res) k -> 
+       match !cont with
+       | Some c ->
+          (*TODO need to investigate: how to avoid clone_continuation invocations *)
+          cont := Some (Obj.clone_continuation c); 
+          continue c res
+       | None -> failwith "uninitialized join continuation"          
     | effect S0.GetMail k -> continue k !mbox0
     | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
     | effect S1.GetMail k -> continue k !mbox1
@@ -504,7 +537,9 @@ module Join1(T: sig type t0 end) = struct
   let slots: slots = [|(module S0)|]                          
   effect Trigger: result -> unit
   let trigger v = perform (Trigger v)
-
+  effect SetCont: (result, unit) continuation -> unit
+  let setCont c = perform (SetCont c)
+                
   module Aux = struct
     (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
     let refcounts0 () = 1
@@ -529,7 +564,16 @@ module Join1(T: sig type t0 end) = struct
   (* Handler for the ambient mailbox state *)                            
   let ambientState action =
     let mbox0: (S0.t * int) list ref = ref [] in
+    let cont: (result, unit) continuation option ref = ref None in
     try action () with
+    | effect (SetCont c) k -> cont := Some c; continue k ()
+    | effect (Trigger res) k -> 
+       match !cont with
+       | Some c ->
+          (*TODO need to investigate: how to avoid clone_continuation invocations *)
+          cont := Some (Obj.clone_continuation c); 
+          continue c res
+       | None -> failwith "uninitialized join continuation"          
     | effect S0.GetMail k -> continue k !mbox0
     | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
 end
