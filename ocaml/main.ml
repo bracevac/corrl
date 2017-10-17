@@ -169,7 +169,8 @@ module type Slot = sig
   val getMail: unit -> (t * int) list
   (* Set mailbox state *)                         
   effect SetMail: (t * int) list -> unit
-  val setMail: (t * int) list -> unit  
+  val setMail: (t * int) list -> unit
+  val stateHandler: (unit -> 'a) -> 'a  
 end
 
 module Slot(T: SomeT): Slot = struct
@@ -180,10 +181,20 @@ module Slot(T: SomeT): Slot = struct
   let getMail () = perform GetMail                     
   effect SetMail: (t * int) list -> unit
   let setMail l = perform (SetMail l)
+
+  let stateHandler action =
+    let mbox: (t * int) list ref = ref [] in (* TODO avoid mutability *)
+    try action () with
+    | effect GetMail k -> continue k !mbox
+    | effect (SetMail l) k -> mbox := l; continue k ()                  
 end
 
 type slots = (module Slot) array
-  
+
+let compose_h hs action =
+  let comp h thnk = (fun () -> (h thnk)) in
+  List.fold_right comp hs action                  
+           
 let rec forkEach f = function
   | [] -> ()
   | x::xs -> if (ManyWorlds.fork ()) then (f x) else (forkEach f xs)
@@ -323,28 +334,33 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end): Join = struct
 
   (* Handler for the ambient mailbox state *)                            
   let ambientState (action: unit -> unit) =
-    let mbox0: (S0.t * int) list ref = ref [] in (* TODO avoid mutability *)
-    let mbox1: (S1.t * int) list ref = ref [] in
-    let mbox2: (S2.t * int) list ref = ref [] in
-    let mbox3: (S3.t * int) list ref = ref [] in
+    let action =
+      compose_h [S0.stateHandler;
+                 S1.stateHandler;
+                 S2.stateHandler;
+                 S3.stateHandler] action in   
     let cont: (result, unit) continuation option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k -> 
        match !cont with
        | Some c ->
-          (*TODO need to investigate: how to avoid clone_continuation invocations *)
-          cont := Some (Obj.clone_continuation c); 
+          (* IMPORTANT: we assume that c works with forking, does not do anything funky with resources *)
+          (* TODO: make this a thunk instead? *)
+          (* cont := Some (Obj.clone_continuation c);  *)          
           continue c res
        | None -> failwith "uninitialized join continuation"          
-    | effect S0.GetMail k -> continue k !mbox0
-    | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
-    | effect S1.GetMail k -> continue k !mbox1
-    | effect (S1.SetMail l) k -> mbox1 := l; continue k ()
-    | effect S2.GetMail k -> continue k !mbox2
-    | effect (S2.SetMail l) k -> mbox2 := l; continue k ()                                                       
-    | effect S3.GetMail k -> continue k !mbox3
-    | effect (S3.SetMail l) k -> mbox3 := l; continue k ()                                                       
+
+  (* let correlate (type a) (pattern: result -> unit) =
+   *   let module S = SingleWorld(struct type t = a end) in
+   *   let setup () =
+   *     setPattern
+   *   ambientState (fun () ->
+   *       assemble pattern())
+   *       
+   *   S.handler pattern *)
+
+    
 end
 
 module Join3(T: sig type t0 type t1 type t2 end): Join = struct
@@ -436,25 +452,18 @@ module Join3(T: sig type t0 type t1 type t2 end): Join = struct
 
   (* Handler for the ambient mailbox state *)                            
   let ambientState action =
-    let mbox0: (S0.t * int) list ref = ref [] in
-    let mbox1: (S1.t * int) list ref = ref [] in
-    let mbox2: (S2.t * int) list ref = ref [] in
+    let action =
+      compose_h [S0.stateHandler;
+                 S1.stateHandler;
+                 S2.stateHandler] action in   
     let cont: (result, unit) continuation option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k -> 
        match !cont with
        | Some c ->
-          (*TODO need to investigate: how to avoid clone_continuation invocations *)
-          cont := Some (Obj.clone_continuation c); 
           continue c res
        | None -> failwith "uninitialized join continuation"          
-    | effect S0.GetMail k -> continue k !mbox0
-    | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
-    | effect S1.GetMail k -> continue k !mbox1
-    | effect (S1.SetMail l) k -> mbox1 := l; continue k ()
-    | effect S2.GetMail k -> continue k !mbox2
-    | effect (S2.SetMail l) k -> mbox2 := l; continue k ()                                 
 end
 
 module Join2(T: sig type t0 type t1 end): Join = struct
@@ -523,23 +532,18 @@ module Join2(T: sig type t0 type t1 end): Join = struct
        forkEach trigger (cartesian1 v)
 
   (* Handler for the ambient mailbox state *)                            
-  let ambientState action =
-    let mbox0: (S0.t * int) list ref = ref [] in
-    let mbox1: (S1.t * int) list ref = ref [] in
+  let ambientState action =    
+    let action =
+      compose_h [S0.stateHandler;
+                 S1.stateHandler] action in   
     let cont: (result, unit) continuation option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k -> 
        match !cont with
        | Some c ->
-          (*TODO need to investigate: how to avoid clone_continuation invocations *)
-          cont := Some (Obj.clone_continuation c); 
           continue c res
        | None -> failwith "uninitialized join continuation"          
-    | effect S0.GetMail k -> continue k !mbox0
-    | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
-    | effect S1.GetMail k -> continue k !mbox1
-    | effect (S1.SetMail l) k -> mbox1 := l; continue k ()
 end
 
 module Join1(T: sig type t0 end): Join = struct
@@ -574,24 +578,19 @@ module Join1(T: sig type t0 end): Join = struct
 
   (* Handler for the ambient mailbox state *)                            
   let ambientState action =
-    let mbox0: (S0.t * int) list ref = ref [] in
+    let action = (fun () -> S0.stateHandler action) in
     let cont: (result, unit) continuation option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k -> 
        match !cont with
        | Some c ->
-          (*TODO need to investigate: how to avoid clone_continuation invocations *)
-          cont := Some (Obj.clone_continuation c); 
           continue c res
        | None -> failwith "uninitialized join continuation"          
-    | effect S0.GetMail k -> continue k !mbox0
-    | effect (S0.SetMail l) k -> mbox0 := l; continue k ()                                                       
-end
-                                         
+end                                         
                                         
 let globalContext show action = ManyWorlds.handler show action
-
+                             
 (*TODO do we really need SingleWorld at all?*)                              
 let correlate (type a) (pattern: unit -> a) =
   let module S = SingleWorld(struct type t = a end) in
@@ -605,6 +604,7 @@ let forAll (x: (module Slot)) action =
      X.setMail ((x,0) :: (X.getMail ()));
      continue k (X.push x)
 
+     
 let testStreams = begin
   let e1 = Ev (0, (1,1)) in
   let e2 = Ev (2, (2,2)) in 
