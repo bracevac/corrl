@@ -101,12 +101,20 @@ end
 
 (* Event streams *)           
 module Reactive = struct
-  type 'a react = RNil | RCons of ('a Evt.evt) * ('a react Async.promise)
-
-  let rec toReact: 'a Evt.evt list -> 'a react =
+  type 'a react = RNil | RCons of 'a * ('a react Async.promise)
+  type 'a r = 'a react Async.promise                                
+                                
+  let toR: 'a list -> 'a r = fun l ->
+    let rec _toR = 
     function
     | [] -> RNil
-    | x::xs -> RCons (x, (Async.liftPromise (toReact xs)))
+    | x::xs -> RCons (x, (Async.liftPromise (_toR xs)))
+    in Async.liftPromise (_toR l)
+
+  let rec eat f stream =
+    match Async.await stream with
+    | RCons (hd, tl) -> (f hd); eat f tl
+    | RNil -> ()        
 end
 
 open Evt
@@ -170,7 +178,8 @@ module type Slot = sig
   (* Set mailbox state *)                         
   effect SetMail: (t * int) list -> unit
   val setMail: (t * int) list -> unit
-  val stateHandler: (unit -> 'a) -> 'a  
+  val stateHandler: (unit -> 'a) -> 'a
+  val forAll: (unit -> 'a) -> 'a  
 end
 
 module Slot(T: SomeT): Slot = struct
@@ -186,11 +195,19 @@ module Slot(T: SomeT): Slot = struct
     let mbox: (t * int) list ref = ref [] in (* TODO avoid mutability *)
     try action () with
     | effect GetMail k -> continue k !mbox
-    | effect (SetMail l) k -> mbox := l; continue k ()                  
+    | effect (SetMail l) k -> mbox := l; continue k ()
+
+  let forAll action =
+    try action () with
+    | effect (Push x) k ->
+       setMail ((x,0) :: (getMail ()));
+       continue k (push x)                              
 end
 
 type slots = (module Slot) array
 
+let globalContext show action = ManyWorlds.handler show action
+              
 let compose_h hs action =
   let comp h thnk = (fun () -> (h thnk)) in
   List.fold_right comp hs action                  
@@ -217,7 +234,7 @@ module type Join = sig
   val trigger: result -> unit
   effect SetCont: (result, unit) continuation -> unit  
   val setCont: (result, unit) continuation -> unit
-  val assemble: (unit -> unit) -> unit
+  val assemble: (unit -> unit) -> unit (* TODO: generalize return type? *)
   val ambientState: (unit -> unit) -> unit
 end
                 
@@ -298,6 +315,13 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end): Join = struct
                     (fun (y,_) -> y == x)
                     (fun (x,c) -> (x,c+(refcounts3 ())))
                     (S3.getMail ()))
+
+    let eat_all (s0,s1,s2,s3) =
+      let thunks = [(fun () -> Reactive.eat S0.push s0);
+                    (fun () -> Reactive.eat S1.push s1);
+                    (fun () -> Reactive.eat S2.push s2);
+                    (fun () -> Reactive.eat S3.push s3)] in
+      List.map Async.async thunks
   end
   open Aux           
 
@@ -351,16 +375,22 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end): Join = struct
           continue c res
        | None -> failwith "uninitialized join continuation"          
 
-  (* let correlate (type a) (pattern: result -> unit) =
-   *   let module S = SingleWorld(struct type t = a end) in
-   *   let setup () =
-   *     setPattern
-   *   ambientState (fun () ->
-   *       assemble pattern())
-   *       
-   *   S.handler pattern *)
-
-    
+  effect Join: (S0.t r * S1.t r * S2.t r * S3.t r) -> result
+  let join sp = perform (Join sp)             
+               
+  let correlate pattern () =
+    compose_h [ambientState;
+               assemble;
+               S0.forAll;
+               S1.forAll;
+               S2.forAll;
+               S3.forAll]
+      (fun () ->
+        try pattern () with
+        | effect (Join streams) k ->
+           setCont k;
+           eat_all streams; (* TODO keep the promises? *)
+           ())               
 end
 
 module Join3(T: sig type t0 type t1 type t2 end): Join = struct
@@ -589,34 +619,19 @@ module Join1(T: sig type t0 end): Join = struct
        | None -> failwith "uninitialized join continuation"          
 end                                         
                                         
-let globalContext show action = ManyWorlds.handler show action
-                             
-(*TODO do we really need SingleWorld at all?*)                              
-let correlate (type a) (pattern: unit -> a) =
-  let module S = SingleWorld(struct type t = a end) in
-  S.handler pattern
-
-   
-let forAll (x: (module Slot)) action =
-  let module X = (val x) in
-  try action () with
-  | effect (X.Push x) k ->
-     X.setMail ((x,0) :: (X.getMail ()));
-     continue k (X.push x)
-
      
 let testStreams = begin
   let e1 = Ev (0, (1,1)) in
   let e2 = Ev (2, (2,2)) in 
   let e3 = Ev (4, (3,3)) in 
   let e4 = Ev (6, (4,4)) in 
-  let s1 = toReact([e1; e2; e3; e4]) in
+  let s1 = toR([e1; e2; e3; e4]) in
 
   let e5 = Ev ("1", (5,5)) in
   let e6 = Ev ("3", (6,6)) in
   let e7 = Ev ("5", (7,7)) in
   let e8 = Ev ("7", (8,8)) in
-  let s2 = toReact([e5; e6; e7; e8]) in
+  let s2 = toR([e5; e6; e7; e8]) in
   (s1,s2)
   end
     
