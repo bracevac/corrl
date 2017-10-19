@@ -123,7 +123,7 @@ open Reactive
 module type SomeT = sig
   type t
 end     
-                  
+
 (* TODO have separate module types *)                                               
 module SingleWorld(T: SomeT) = struct
   type t = T.t
@@ -139,7 +139,7 @@ module SingleWorld(T: SomeT) = struct
     | effect (Yield v) _ -> Some v
     | effect Cancel _ -> None                      
 end
-
+                  
 module ManyWorlds = struct
   effect Fork : bool  
   let fork () = perform Fork
@@ -162,6 +162,13 @@ module ManyWorlds = struct
 
   let handler onDone action = run onDone (ref []) action     
 end
+
+let context (type a) (show: a -> string) action =
+  let onDone = function
+    | None -> ()
+    | Some x -> print_string (show x); print_newline ()
+  in
+  ManyWorlds.handler onDone action                  
 
 (* A slot x represents a binding 'x from ...' inside of a correlate block.
    Each binding has specific effects attached to it (generative effects).
@@ -206,8 +213,6 @@ end
 
 type slots = (module Slot) array
 
-let globalContext show action = ManyWorlds.handler show action
-              
 let with_h hs action =
   let comp h thnk = (fun () -> (h thnk)) in
   List.fold_right comp hs action                  
@@ -230,6 +235,7 @@ let inc_snd n l = List.map (fun (y,c) -> (y,c+n)) l
 module type Join = sig
   type input
   type joined
+  type result     
   val slots: slots
   effect Join: input -> joined
   val join: input -> joined                 
@@ -246,12 +252,13 @@ module type Join = sig
 end
                 
 (*lame! can we have a nice arity-abstracting join definition for any n?*)                
-module Join4(T: sig type t0 type t1 type t2 type t3 end) = struct
+module Join4(T: sig type t0 type t1 type t2 type t3 type result end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   module S1 = Slot(struct type t = T.t1 end)
   module S2 = Slot(struct type t = T.t2 end)
   module S3 = Slot(struct type t = T.t3 end)
-  type joined = S0.t * S1.t * S2.t * S3.t              
+  type joined = S0.t * S1.t * S2.t * S3.t
+  type result = T.result              
   let slots: slots = [|(module S0);(module S1);(module S2);(module S3)|]
   type input = S0.t r * S1.t r * S2.t r * S3.t r              
   effect Join: input -> joined
@@ -404,11 +411,12 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end) = struct
       setup ()
 end
                                                                
-module Join3(T: sig type t0 type t1 type t2 end): Join = struct
+module Join3(T: sig type t0 type t1 type t2 type result end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   module S1 = Slot(struct type t = T.t1 end)
   module S2 = Slot(struct type t = T.t2 end)
   type joined = S0.t * S1.t * S2.t
+  type result = T.result
   let slots: slots = [|(module S0);(module S1);(module S2)|]
   type input = S0.t r * S1.t r * S2.t r     
   effect Join: input -> joined
@@ -533,12 +541,13 @@ module Join3(T: sig type t0 type t1 type t2 end): Join = struct
       setup ()              
 end
 
-module Join2(T: sig type t0 type t1 end): Join = struct
+module Join2(T: sig type t0 type t1 type result end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   module S1 = Slot(struct type t = T.t1 end)
   type joined = S0.t * S1.t
   let slots: slots = [|(module S0);(module S1)|]
   type input = S0.t r * S1.t r
+  type result = T.result
   effect Join: input -> joined
   let join sp = perform (Join sp)                                    
   effect Trigger: joined -> unit
@@ -636,11 +645,12 @@ module Join2(T: sig type t0 type t1 end): Join = struct
       setup ()              
 end
 
-module Join1(T: sig type t0 end): Join = struct
+module Join1(T: sig type t0 type result end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   type joined = S0.t
   let slots: slots = [|(module S0)|]
-  type input = S0.t r 
+  type input = S0.t r
+  type result = T.result
   effect Join: input -> joined
   let join sp = perform (Join sp)                                    
   effect Trigger: joined -> unit
@@ -698,8 +708,7 @@ module Join1(T: sig type t0 end): Join = struct
             S0.forAll;
             window]
       setup ()               
-end                                         
-                                        
+end                                                                                                    
      
 let testStreams = begin
   let e1 = Ev (0, (1,1)) in
@@ -716,4 +725,17 @@ let testStreams = begin
   (s1,s2)
   end
     
+let cartesian2 (type a) (type b) (show: a * b -> string) (s1: a r) (s2: b r) =
+  let module T = struct type t0 = a type t1 = b type result = a * b end in
+  let module J = Join2(T) in
+  let module S = SingleWorld(struct type t = J.result end) in
+  context
+    show
+    (fun () ->
+      S.handler 
+          (J.correlate (fun () ->
+              let (x,y) = J.join (s1, s2) in
+              yield (x,y))))
+  
     
+                    
