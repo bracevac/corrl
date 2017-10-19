@@ -123,7 +123,7 @@ open Reactive
 module type SomeT = sig
   type t
 end     
-
+                  
 (* TODO have separate module types *)                                               
 module SingleWorld(T: SomeT) = struct
   type t = T.t
@@ -179,7 +179,7 @@ module type Slot = sig
   effect SetMail: (t * int) list -> unit
   val setMail: (t * int) list -> unit
   val stateHandler: (unit -> 'a) -> 'a
-  val forAll: (unit -> 'a) -> 'a  
+  val forAll: (unit -> 'a) -> 'a
 end
 
 module Slot(T: SomeT): Slot = struct
@@ -208,7 +208,7 @@ type slots = (module Slot) array
 
 let globalContext show action = ManyWorlds.handler show action
               
-let compose_h hs action =
+let with_h hs action =
   let comp h thnk = (fun () -> (h thnk)) in
   List.fold_right comp hs action                  
            
@@ -228,28 +228,38 @@ let rec update_first p f = function
 let inc_snd n l = List.map (fun (y,c) -> (y,c+n)) l    
 
 module type Join = sig
-  type result
+  type input
+  type joined
   val slots: slots
-  effect Trigger: result -> unit
-  val trigger: result -> unit
-  effect SetCont: (result, unit) continuation -> unit  
-  val setCont: (result, unit) continuation -> unit
+  effect Join: input -> joined
+  val join: input -> joined                 
+  effect Trigger: joined -> unit
+  val trigger: joined -> unit
+  effect SetCont: (joined, unit) continuation -> unit  
+  val setCont: (joined, unit) continuation -> unit
   val assemble: (unit -> unit) -> unit (* TODO: generalize return type? *)
   val ambientState: (unit -> unit) -> unit
+  val correlate :
+    ?window:((unit -> unit) -> unit) ->
+    ?restriction:((unit -> unit) -> unit) ->
+    (unit -> unit) -> unit -> unit
 end
                 
 (*lame! can we have a nice arity-abstracting join definition for any n?*)                
-module Join4(T: sig type t0 type t1 type t2 type t3 end): Join = struct
+module Join4(T: sig type t0 type t1 type t2 type t3 end) = struct
   module S0 = Slot(struct type t = T.t0 end)
   module S1 = Slot(struct type t = T.t1 end)
   module S2 = Slot(struct type t = T.t2 end)
-  module S3 = Slot(struct type t = T.t3 end)            
-  type result = S0.t * S1.t * S2.t * S3.t
-  let slots: slots = [|(module S0);(module S1);(module S2);(module S3)|]                          
-  effect Trigger: result -> unit
+  module S3 = Slot(struct type t = T.t3 end)
+  type joined = S0.t * S1.t * S2.t * S3.t              
+  let slots: slots = [|(module S0);(module S1);(module S2);(module S3)|]
+  type input = S0.t r * S1.t r * S2.t r * S3.t r              
+  effect Join: input -> joined
+  let join sp = perform (Join sp)                                    
+  effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
-  effect SetCont: (result, unit) continuation -> unit
-  let setCont c = perform (SetCont c)
+  effect SetCont: (joined, unit) continuation -> unit
+  let setCont c = perform (SetCont c)                 
                 
   module Aux = struct
     let _cart f thnk1 thnk2 thnk3 x =
@@ -331,13 +341,13 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end): Join = struct
      slots S_k, where k =/= i. The typical use case is interpreting the
      S_i.Push effect: Compute the collection cartesian_i and pass its 
      elements to the Complete effect, i.e., trigger the pattern body. *)           
-  let cartesian0: S0.t -> result list =
+  let cartesian0: S0.t -> joined list =
     (_cart shuffle0 mail1 mail2 mail3)
-  let cartesian1: S1.t -> result list =
+  let cartesian1: S1.t -> joined list =
     (_cart shuffle1 mail0 mail2 mail3)
-  let cartesian2: S2.t -> result list =
+  let cartesian2: S2.t -> joined list =
     (_cart shuffle2 mail0 mail1 mail3)
-  let cartesian3: S3.t -> result list =
+  let cartesian3: S3.t -> joined list =
     (_cart shuffle3 mail0 mail1 mail2)
 
   (* The final stage in the handler stack, implementing the cartesian semantics *)  
@@ -359,11 +369,11 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end): Join = struct
   (* Handler for the ambient mailbox state *)                            
   let ambientState (action: unit -> unit) =
     let action =
-      compose_h [S0.stateHandler;
-                 S1.stateHandler;
-                 S2.stateHandler;
-                 S3.stateHandler] action in   
-    let cont: (result, unit) continuation option ref = ref None in
+      with_h [S0.stateHandler;
+              S1.stateHandler;
+              S2.stateHandler;
+              S3.stateHandler] action in   
+    let cont: (joined, unit) continuation option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k -> 
@@ -374,34 +384,38 @@ module Join4(T: sig type t0 type t1 type t2 type t3 end): Join = struct
           (* cont := Some (Obj.clone_continuation c);  *)          
           continue c res
        | None -> failwith "uninitialized join continuation"          
-
-  effect Join: (S0.t r * S1.t r * S2.t r * S3.t r) -> result
-  let join sp = perform (Join sp)             
                
-  let correlate pattern () =
-    compose_h [ambientState;
-               assemble;
-               S0.forAll;
-               S1.forAll;
-               S2.forAll;
-               S3.forAll]
-      (fun () ->
-        try pattern () with
-        | effect (Join streams) k ->
+  let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
+    let setup () =
+      try pattern () with
+      | effect (Join streams) k ->
            setCont k;
-           eat_all streams; (* TODO keep the promises? *)
-           ())               
+           let _ = eat_all streams in (* TODO keep the promises? *)
+           ()
+    in
+    with_h [ambientState;
+            assemble;
+            restriction;
+            S0.forAll;
+            S1.forAll;
+            S2.forAll;
+            S3.forAll;
+            window]
+      setup ()
 end
-
+                                                               
 module Join3(T: sig type t0 type t1 type t2 end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   module S1 = Slot(struct type t = T.t1 end)
   module S2 = Slot(struct type t = T.t2 end)
-  type result = S0.t * S1.t * S2.t
-  let slots: slots = [|(module S0);(module S1);(module S2)|]                          
-  effect Trigger: result -> unit
+  type joined = S0.t * S1.t * S2.t
+  let slots: slots = [|(module S0);(module S1);(module S2)|]
+  type input = S0.t r * S1.t r * S2.t r     
+  effect Join: input -> joined
+  let join sp = perform (Join sp)                                                           
+  effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
-  effect SetCont: (result, unit) continuation -> unit
+  effect SetCont: (joined, unit) continuation -> unit
   let setCont c = perform (SetCont c)
                 
   module Aux = struct
@@ -451,6 +465,12 @@ module Join3(T: sig type t0 type t1 type t2 end): Join = struct
                     (fun (y,_) -> y == x)
                     (fun (x,c) -> (x,c+(refcounts2 ())))
                     (S2.getMail ()))
+
+    let eat_all (s0,s1,s2) =
+      let thunks = [(fun () -> Reactive.eat S0.push s0);
+                    (fun () -> Reactive.eat S1.push s1);
+                    (fun () -> Reactive.eat S2.push s2)] in
+      List.map Async.async thunks
   end
   open Aux           
 
@@ -460,11 +480,11 @@ module Join3(T: sig type t0 type t1 type t2 end): Join = struct
      slots S_k, where k =/= i. The typical use case is interpreting the
      S_i.Push effect: Compute the collection cartesian_i and pass its 
      elements to the Complete effect, i.e., trigger the pattern body. *)           
-  let cartesian0: S0.t -> result list =
+  let cartesian0: S0.t -> joined list =
     (_cart shuffle0 mail1 mail2)
-  let cartesian1: S1.t -> result list =
+  let cartesian1: S1.t -> joined list =
     (_cart shuffle1 mail0 mail2)
-  let cartesian2: S2.t -> result list =
+  let cartesian2: S2.t -> joined list =
     (_cart shuffle2 mail0 mail1)
 
   (* The final stage in the handler stack, implementing the cartesian semantics *)  
@@ -483,27 +503,47 @@ module Join3(T: sig type t0 type t1 type t2 end): Join = struct
   (* Handler for the ambient mailbox state *)                            
   let ambientState action =
     let action =
-      compose_h [S0.stateHandler;
-                 S1.stateHandler;
-                 S2.stateHandler] action in   
-    let cont: (result, unit) continuation option ref = ref None in
+      with_h [S0.stateHandler;
+              S1.stateHandler;
+              S2.stateHandler] action in   
+    let cont: (joined, unit) continuation option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k -> 
        match !cont with
        | Some c ->
           continue c res
-       | None -> failwith "uninitialized join continuation"          
+       | None -> failwith "uninitialized join continuation"
+
+  let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =               
+    let setup () =
+      try pattern () with
+      | effect (Join streams) k ->
+           setCont k;
+           let _ = eat_all streams in (* TODO keep the promises? *)
+           ()
+    in
+    with_h [ambientState;
+            assemble;
+            restriction;
+            S0.forAll;
+            S1.forAll;
+            S2.forAll;
+            window]
+      setup ()              
 end
 
 module Join2(T: sig type t0 type t1 end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
   module S1 = Slot(struct type t = T.t1 end)
-  type result = S0.t * S1.t
-  let slots: slots = [|(module S0);(module S1)|]                          
-  effect Trigger: result -> unit
+  type joined = S0.t * S1.t
+  let slots: slots = [|(module S0);(module S1)|]
+  type input = S0.t r * S1.t r
+  effect Join: input -> joined
+  let join sp = perform (Join sp)                                    
+  effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
-  effect SetCont: (result, unit) continuation -> unit
+  effect SetCont: (joined, unit) continuation -> unit
   let setCont c = perform (SetCont c)
 
   module Aux = struct
@@ -537,6 +577,10 @@ module Join2(T: sig type t0 type t1 end): Join = struct
                     (fun (y,_) -> y == x)
                     (fun (x,c) -> (x,c+(refcounts1 ())))
                     (S1.getMail ()))
+    let eat_all (s0,s1) =
+      let thunks = [(fun () -> Reactive.eat S0.push s0);
+                    (fun () -> Reactive.eat S1.push s1)] in
+      List.map Async.async thunks
   end
   open Aux           
 
@@ -546,9 +590,9 @@ module Join2(T: sig type t0 type t1 end): Join = struct
      slots S_k, where k =/= i. The typical use case is interpreting the
      S_i.Push effect: Compute the collection cartesian_i and pass its 
      elements to the Complete effect, i.e., trigger the pattern body. *)           
-  let cartesian0: S0.t -> result list =
+  let cartesian0: S0.t -> joined list =
     (_cart shuffle0 mail1)
-  let cartesian1: S1.t -> result list =
+  let cartesian1: S1.t -> joined list =
     (_cart shuffle1 mail0)
 
   (* The final stage in the handler stack, implementing the cartesian semantics *)  
@@ -564,25 +608,44 @@ module Join2(T: sig type t0 type t1 end): Join = struct
   (* Handler for the ambient mailbox state *)                            
   let ambientState action =    
     let action =
-      compose_h [S0.stateHandler;
-                 S1.stateHandler] action in   
-    let cont: (result, unit) continuation option ref = ref None in
+      with_h [S0.stateHandler;
+              S1.stateHandler] action in   
+    let cont: (joined, unit) continuation option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k -> 
        match !cont with
        | Some c ->
           continue c res
-       | None -> failwith "uninitialized join continuation"          
+       | None -> failwith "uninitialized join continuation"
+
+  let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
+    let setup () =
+      try pattern () with
+      | effect (Join streams) k ->
+           setCont k;
+           let _ = eat_all streams in (* TODO keep the promises? *)
+           ()
+    in
+    with_h [ambientState;
+            assemble;
+            restriction;
+            S0.forAll;
+            S1.forAll;
+            window]
+      setup ()              
 end
 
 module Join1(T: sig type t0 end): Join = struct
   module S0 = Slot(struct type t = T.t0 end)
-  type result = S0.t
-  let slots: slots = [|(module S0)|]                          
-  effect Trigger: result -> unit
+  type joined = S0.t
+  let slots: slots = [|(module S0)|]
+  type input = S0.t r 
+  effect Join: input -> joined
+  let join sp = perform (Join sp)                                    
+  effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
-  effect SetCont: (result, unit) continuation -> unit
+  effect SetCont: (joined, unit) continuation -> unit
   let setCont c = perform (SetCont c)
                 
   module Aux = struct
@@ -594,10 +657,13 @@ module Join1(T: sig type t0 end): Join = struct
                     (fun (y,_) -> y == x)
                     (fun (x,c) -> (x,c+(refcounts0 ())))
                     (S0.getMail ()))
+    let eat_all s0 =
+      let thunks = [(fun () -> Reactive.eat S0.push s0)] in
+      List.map Async.async thunks  
   end
   open Aux           
 
-  let cartesian0: S0.t -> result list = (fun x -> [x])
+  let cartesian0: S0.t -> joined list = (fun x -> [x])
 
   (* The final stage in the handler stack, implementing the cartesian semantics *)  
   let assemble action =
@@ -609,14 +675,29 @@ module Join1(T: sig type t0 end): Join = struct
   (* Handler for the ambient mailbox state *)                            
   let ambientState action =
     let action = (fun () -> S0.stateHandler action) in
-    let cont: (result, unit) continuation option ref = ref None in
+    let cont: (joined, unit) continuation option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k -> 
        match !cont with
        | Some c ->
           continue c res
-       | None -> failwith "uninitialized join continuation"          
+       | None -> failwith "uninitialized join continuation"
+
+  let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
+    let setup () =
+      try pattern () with
+      | effect (Join streams) k ->
+         setCont k;
+         let _ = eat_all streams in (* TODO keep the promises? *)
+         ()
+    in
+    with_h [ambientState;
+            assemble;
+            restriction;
+            S0.forAll;
+            window]
+      setup ()               
 end                                         
                                         
      
