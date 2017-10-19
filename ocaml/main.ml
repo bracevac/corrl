@@ -94,7 +94,7 @@ end
  * end *)
                  
 module Evt = struct
-  let ( <@> ) (a,b) (c,d) = (min a c, max b d)
+  let ( |@| ) (a,b) (c,d) = (min a c, max b d)
   let tzero = (max_int, min_int) (* representation of empty interval *)               
   type 'a evt = Ev of 'a * (int * int)                      
 end
@@ -222,7 +222,7 @@ module Slot(T: SomeT): (SLOT with type t = T.t) = struct
        continue k (push x)                              
 end
 
-type slots = (module Slot) array
+type slots = (module SLOT) array
 
 let with_h hs action =
   let comp h thnk = (fun () -> (h thnk)) in
@@ -263,15 +263,15 @@ module type JOIN = sig
 end
                 
 (*lame! can we have a nice arity-abstracting join definition for any n?*)                
-module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with type joined = T.t0 * T.t1 * T.t2 * T.t3
-                                                                             and type input = T.t0 r * T.t1 r * T.t2 r * T.t3 r
-                                                                             and type result = T.result) = struct
-  module S0 = Slot(struct type t = T.t0 end)
-  module S1 = Slot(struct type t = T.t1 end)
-  module S2 = Slot(struct type t = T.t2 end)
-  module S3 = Slot(struct type t = T.t3 end)
+module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt * T.t2 evt * T.t3 evt
+                                                                             and type input = T.t0 evt r * T.t1 evt r * T.t2 evt r * T.t3 evt r
+                                                                             and type result = T.result evt) = struct
+  module S0 = Slot(struct type t = T.t0 evt end)
+  module S1 = Slot(struct type t = T.t1 evt end)
+  module S2 = Slot(struct type t = T.t2 evt end)
+  module S3 = Slot(struct type t = T.t3 evt end)
   type joined = S0.t * S1.t * S2.t * S3.t
-  type result = T.result              
+  type result = T.result evt             
   let slots: slots = [|(module S0);(module S1);(module S2);(module S3)|]
   type input = S0.t r * S1.t r * S2.t r * S3.t r              
   effect Join: input -> joined
@@ -424,14 +424,14 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
       setup ()
 end
                                                                
-module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type joined = T.t0 * T.t1 * T.t2
-                                                                     and type input = T.t0 r * T.t1 r * T.t2 r
-                                                                     and type result = T.result) = struct
-  module S0 = Slot(struct type t = T.t0 end)
-  module S1 = Slot(struct type t = T.t1 end)
-  module S2 = Slot(struct type t = T.t2 end)
+module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt * T.t2 evt
+                                                                     and type input = T.t0 evt r * T.t1 evt r * T.t2 evt r
+                                                                     and type result = T.result evt) = struct
+  module S0 = Slot(struct type t = T.t0 evt end)
+  module S1 = Slot(struct type t = T.t1 evt end)
+  module S2 = Slot(struct type t = T.t2 evt end)
   type joined = S0.t * S1.t * S2.t
-  type result = T.result
+  type result = T.result evt
   let slots: slots = [|(module S0);(module S1);(module S2)|]
   type input = S0.t r * S1.t r * S2.t r     
   effect Join: input -> joined
@@ -556,16 +556,16 @@ module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type jo
       setup ()              
 end
 
-module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T.t0 * T.t1
-                                                      and type input = T.t0 r * T.t1 r
-                                                      and type result = T.result)
+module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt
+                                                             and type input = T.t0 evt r * T.t1 evt r
+                                                             and type result = T.result evt)
   = struct
-  module S0 = Slot(struct type t = T.t0 end)
-  module S1 = Slot(struct type t = T.t1 end)
+  module S0 = Slot(struct type t = T.t0 evt end)
+  module S1 = Slot(struct type t = T.t1 evt end)
   type joined = S0.t * S1.t
   let slots: slots = [|(module S0);(module S1)|]
   type input = S0.t r * S1.t r
-  type result = T.result
+  type result = T.result evt
   effect Join: input -> joined
   let join sp = perform (Join sp)                                    
   effect Trigger: joined -> unit
@@ -663,15 +663,15 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
       setup ()              
 end
 
-module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0
-                                                     and type input = T.t0 r
-                                                     and type result = T.result)
+module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0 evt
+                                                     and type input = T.t0 evt r
+                                                     and type result = T.result evt)
   = struct
-  module S0 = Slot(struct type t = T.t0 end)
+  module S0 = Slot(struct type t = T.t0 evt end)
   type joined = S0.t
   let slots: slots = [|(module S0)|]
   type input = S0.t r
-  type result = T.result
+  type result = T.result evt
   effect Join: input -> joined
   let join sp = perform (Join sp)                                    
   effect Trigger: joined -> unit
@@ -746,8 +746,12 @@ let testStreams = begin
   (s1,s2)
   end
     
-let cartesian2 (type a) (type b) (show: a * b -> string) (s1: a r) (s2: b r) =
-  let module T = struct type t0 = a type t1 = b type result = a * b end in
+let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2: b evt r) =
+  let module T = struct type t0 = a
+                        type t1 = b
+                        type result = a * b
+                 end
+  in
   let module J = Join2(T) in
   let module S = SingleWorld(struct type t = J.result end) in
   context
@@ -755,8 +759,13 @@ let cartesian2 (type a) (type b) (show: a * b -> string) (s1: a r) (s2: b r) =
     (fun () ->
       S.handler 
           (J.correlate (fun () ->
-              let (x,y) = J.join (s1, s2) in
-              S.yield (x,y))))
+               let (Ev (x,i1),Ev (y,i2)) = J.join (s1, s2) in               
+               S.yield (Ev ((x,y), i1 |@| i2)))))
   
-    
+let testCartesian2 () =
+  let (s1,s2) = testStreams in
+  let show (Ev ((a,b), (t1,t2))) =
+    Printf.sprintf "<(%d,%s)@[%d,%d]>\n" a b t1 t2
+  in
+  cartesian2 show s1 s2
                     
