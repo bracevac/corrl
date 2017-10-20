@@ -1,5 +1,5 @@
 
-module type Async = sig
+module type ASYNC = sig
   type 'a promise
   (** Type of promises *)
   val async : (unit -> 'a) -> 'a promise
@@ -13,7 +13,21 @@ module type Async = sig
   val liftPromise : 'a -> 'a promise
 end
 
-module Async : Async = struct
+module type DELIMCONT = sig
+  effect Shift: (('a,unit) continuation -> unit) -> 'a
+  val shift: (('a,unit) continuation -> unit) -> 'a
+  val reset: (unit -> unit) -> unit
+end
+                  
+module DelimCont: DELIMCONT = struct
+  effect Shift: (('a,unit) continuation -> unit) -> 'a (* perhaps better to wrap the cont in a function 'a -> unit *)
+  let shift k = perform (Shift k)
+  let reset action =
+    try action () with
+    | effect (Shift f) k -> f k              
+end
+                  
+module Async : ASYNC = struct
 
   type 'a _promise =
     Waiting of ('a,unit) continuation list
@@ -46,11 +60,12 @@ module Async : Async = struct
                | Waiting l -> pr := Done v; List.iter (fun task -> enqueue (fun () -> continue task v)) l
                | Done _ -> failwith "Promise already resolved"
                end;
-             dequeue ()
+               dequeue ()
                             
         | effect (Async f) k ->
            let p = ref (Waiting []) in           
            enqueue (fun () -> continue k p);
+           print_string "ASYNC\n";
            fork p f
 
         | effect Yield k ->
@@ -65,6 +80,8 @@ module Async : Async = struct
             end
     in    
     fork (ref (Waiting [])) main
+
+    
 end 
 
                      
@@ -607,7 +624,9 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
     let eat_all (s0,s1) =
       let thunks = [(fun () -> Reactive.eat S0.push s0);
                     (fun () -> Reactive.eat S1.push s1)] in
-      List.map Async.async thunks
+      print_string "EAT\n";
+      let res = List.map Async.async thunks in
+      print_string "DONE\n"; res
   end
   open Aux           
 
@@ -650,7 +669,9 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
     let setup () =
       try pattern () with
       | effect (Join streams) k ->
+           print_string "I'm here\n";
            setCont k;
+           print_string "Here, too\n";
            let _ = eat_all streams in (* TODO keep the promises? *)
            ()
     in
@@ -746,7 +767,7 @@ let testStreams = begin
   (s1,s2)
   end
     
-let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2: b evt r) =
+let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2: b evt r) () =
   let module T = struct type t0 = a
                         type t1 = b
                         type result = a * b
@@ -758,14 +779,14 @@ let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2
     show
     (fun () ->
       S.handler 
-          (J.correlate (fun () ->
-               let (Ev (x,i1),Ev (y,i2)) = J.join (s1, s2) in               
-               S.yield (Ev ((x,y), i1 |@| i2)))))
+        (J.correlate (fun () ->
+             let (Ev (x,i1),Ev (y,i2)) = J.join (s1, s2) in               
+             S.yield (Ev ((x,y), i1 |@| i2)))))
   
 let testCartesian2 () =
   let (s1,s2) = testStreams in
   let show (Ev ((a,b), (t1,t2))) =
     Printf.sprintf "<(%d,%s)@[%d,%d]>\n" a b t1 t2
   in
-  cartesian2 show s1 s2
+  Async.run (cartesian2 show s1 s2)
                     
