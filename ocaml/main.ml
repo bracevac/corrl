@@ -1,3 +1,16 @@
+module type DELIMCONT = sig
+  effect Shift: (('a,unit) continuation -> unit) -> 'a
+  val shift: (('a,unit) continuation -> unit) -> 'a
+  val reset: (unit -> unit) -> unit
+end
+                  
+module DelimCont: DELIMCONT = struct
+  effect Shift: (('a,unit) continuation -> unit) -> 'a (* TODO perhaps better to wrap the cont in a function 'a -> unit *)
+  let shift k = perform (Shift k)
+  let reset action =
+    try action () with
+    | effect (Shift f) k -> f k              
+end
 
 module type ASYNC = sig
   type 'a promise
@@ -12,21 +25,7 @@ module type ASYNC = sig
   (** Runs the scheduler *)
   val liftPromise : 'a -> 'a promise
 end
-
-module type DELIMCONT = sig
-  effect Shift: (('a,unit) continuation -> unit) -> 'a
-  val shift: (('a,unit) continuation -> unit) -> 'a
-  val reset: (unit -> unit) -> unit
-end
-                  
-module DelimCont: DELIMCONT = struct
-  effect Shift: (('a,unit) continuation -> unit) -> 'a (* perhaps better to wrap the cont in a function 'a -> unit *)
-  let shift k = perform (Shift k)
-  let reset action =
-    try action () with
-    | effect (Shift f) k -> f k              
-end
-                  
+                            
 module Async : ASYNC = struct
 
   type 'a _promise =
@@ -85,36 +84,32 @@ module Async : ASYNC = struct
 end 
 
                      
-(* (\* Time models are monoids over some time representation *\)
- * module type TimeModel = sig
- *   type time                
- *   val ( <@> ) : time -> time -> time
- *   val tzero : time  
- * end
- * 
- * (\* An event is evidence of something that happened at a specific time *\)                      
- * module type Event = sig
- *   type time
- *   type 'a evt     
- * end
- * 
- * module Event(T: TimeModel) = struct
- *   type time = T.time
- *   type 'a evt = Ev of 'a * time
- * end
- *                            
- * (\* Our default time model is interval-based *\)
- * module Interval : TimeModel = struct
- *   type time = int * int
- *   let ( <@> ) (a,b) (c,d) = (min a c, max b d)
- *   let tzero = (max_int, min_int) (\* representation of empty interval *\)                         
- * end *)
-                 
-module Evt = struct
-  let ( |@| ) (a,b) (c,d) = (min a c, max b d)
-  let tzero = (max_int, min_int) (* representation of empty interval *)               
-  type 'a evt = Ev of 'a * (int * int)                      
+(* Time models are monoids over some time representation *)
+module type TimeModel = sig
+  type time                
+  val ( |@| ) : time -> time -> time
+  val tzero : time  
 end
+
+(* An event is evidence of something that happened at a specific time *)                      
+module type Event = sig
+  type time
+  type 'a evt = Ev of 'a * time
+end
+
+module Event(T: TimeModel): (Event with type time = T.time) = struct
+  type time = T.time
+  type 'a evt = Ev of 'a * time                    
+end
+                           
+(* Our default time model is interval-based *)
+module Interval : (TimeModel with type time = int * int) = struct
+  type time = int * int
+  let ( |@| ) (a,b) (c,d) = (min a c, max b d)
+  let tzero = (max_int, min_int) (* representation of empty interval *)                         
+end
+                 
+module Evt = Event(Interval)
 
 (* Event streams *)           
 module Reactive = struct
@@ -152,7 +147,6 @@ module type SINGLEWORLD = sig
   val handler: (unit -> 'a) -> t option  
 end
 
-(* TODO have separate module types *)                                               
 module SingleWorld(T: SomeT): (SINGLEWORLD with type t = T.t) = struct
   type t = T.t
   effect Yield  : t -> unit
@@ -780,7 +774,7 @@ let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2
     (fun () ->
       S.handler 
         (J.correlate (fun () ->
-             let (Ev (x,i1),Ev (y,i2)) = J.join (s1, s2) in               
+             let (Ev (x,i1),Ev (y,i2)) = J.join (s1,s2) in               
              S.yield (Ev ((x,y), i1 |@| i2)))))
   
 let testCartesian2 () =
@@ -788,5 +782,6 @@ let testCartesian2 () =
   let show (Ev ((a,b), (t1,t2))) =
     Printf.sprintf "<(%d,%s)@[%d,%d]>\n" a b t1 t2
   in
-  Async.run (cartesian2 show s1 s2)
+  Async.run (fun () ->
+      DelimCont.reset (cartesian2 show s1 s2))
                     
