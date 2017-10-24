@@ -775,12 +775,12 @@ let affine (join: (module JOIN)) i action =
       let thunk () =
         try thunk () with
         | effect (S.Push v) k ->
-           S.push v;    (* First let upstream apply the effect. *)
-           filter_i (); (* Check what needs to be GC'd. *)
-           continue k ()
+           S.push v;     (* First let upstream apply the effect. *)
+           filter_i ();  (* Check what needs to be GC'd. *)
+           continue k () (* Signal downstream to continue *)
       in thunk
     end
-  in Array.fold_right wrap J.slots action
+  in (Array.fold_right wrap J.slots action) ()
 
 module Test = struct
   let testStreams = begin
@@ -807,6 +807,46 @@ module Test = struct
       (s1,s2,s3,s4)
     end
 
+  let test1 correlation () =
+    let (s1,_,_,_) = testStreams in
+    let count = ref 0 in
+    let show (Ev (a, (t1,t2))) =
+      count := !count + 1;
+      Printf.sprintf "%d. <%d@[%d,%d]>" !count a t1 t2
+    in
+    Async.run (fun () ->
+        DelimCont.reset (correlation show s1))
+
+  let test2 correlation () =
+    let (s1,s2,_,_) = testStreams in
+    let count = ref 0 in
+    let show (Ev ((a,b), (t1,t2))) =
+      count := !count + 1;
+      Printf.sprintf "%d. <(%d,%s)@[%d,%d]>" !count a b t1 t2
+    in
+    Async.run (fun () ->
+        DelimCont.reset (correlation show s1 s2))
+
+  let test3 correlation () =
+    let (s1,s2,s3,_) = testStreams in
+    let count = ref 0 in
+    let show (Ev ((a,b,c), (t1,t2))) =
+      count := !count + 1;
+      Printf.sprintf "%d. <(%d,%s,%.2f)@[%d,%d]>" !count a b c t1 t2
+    in
+    Async.run (fun () ->
+        DelimCont.reset (correlation show s1 s2 s3))
+
+  let test4 correlation () =
+    let (s1,s2,s3,s4) = testStreams in
+    let count = ref 0 in
+    let show (Ev ((a,b,c,d), (t1,t2))) =
+      count := !count + 1;
+      Printf.sprintf "%d. <(%d,%s,%.2f,%d)@[%d,%d]>" !count a b c d t1 t2
+    in
+    Async.run (fun () ->
+        DelimCont.reset (correlation show s1 s2 s3 s4))
+
   let cartesian1 (type a)
         (show: a  evt -> string)
         (s1: a evt r) () =
@@ -825,16 +865,7 @@ module Test = struct
                    | ev ->
                       S.yield ev))))
 
-  let testCartesian1 () =
-    let (s1,_,_,_) = testStreams in
-    let count = ref 0 in
-    let show (Ev (a, (t1,t2))) =
-      count := !count + 1;
-      Printf.sprintf "%d. <%d@[%d,%d]>" !count a t1 t2
-    in
-    Async.run (fun () ->
-        DelimCont.reset (cartesian1 show s1))
-
+  let testCartesian1 () = test1 cartesian1 ()
 
   let cartesian2 (type a) (type b)
         (show: (a * b) evt -> string)
@@ -856,15 +887,7 @@ module Test = struct
                    | (Ev (x,i1),Ev (y,i2)) ->
                       S.yield (Ev ((x,y), i1 |@| i2))))))
 
-  let testCartesian2 () =
-    let (s1,s2,_,_) = testStreams in
-    let count = ref 0 in
-    let show (Ev ((a,b), (t1,t2))) =
-      count := !count + 1;
-      Printf.sprintf "%d. <(%d,%s)@[%d,%d]>" !count a b t1 t2
-    in
-    Async.run (fun () ->
-        DelimCont.reset (cartesian2 show s1 s2))
+  let testCartesian2 () = test2 cartesian2 ()
 
   let cartesian3 (type a) (type b) (type c)
         (show: (a * b * c) evt -> string)
@@ -888,15 +911,7 @@ module Test = struct
                    | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
                       S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
-  let testCartesian3 () =
-    let (s1,s2,s3,_) = testStreams in
-    let count = ref 0 in
-    let show (Ev ((a,b,c), (t1,t2))) =
-      count := !count + 1;
-      Printf.sprintf "%d. <(%d,%s,%.2f)@[%d,%d]>" !count a b c t1 t2
-    in
-    Async.run (fun () ->
-        DelimCont.reset (cartesian3 show s1 s2 s3))
+  let testCartesian3 () = test3 cartesian3 ()
 
   let cartesian4 (type a) (type b) (type c) (type d)
         (show: (a * b * c * d) evt -> string)
@@ -922,14 +937,32 @@ module Test = struct
                    | (Ev (x,i1),Ev (y,i2),Ev (z,i3),Ev (w,i4)) ->
                       S.yield (Ev ((x,y,z,w), i1 |@| i2 |@| i3 |@| i4))))))
 
-  let testCartesian4 () =
-    let (s1,s2,s3,s4) = testStreams in
-    let count = ref 0 in
-    let show (Ev ((a,b,c,d), (t1,t2))) =
-      count := !count + 1;
-      Printf.sprintf "%d. <(%d,%s,%.2f,%d)@[%d,%d]>" !count a b c d t1 t2
+  let testCartesian4 () = test4 cartesian4 ()
+
+  let affine3_1 (type a) (type b) (type c)
+        (show: (a * b * c) evt -> string)
+        (s1: a evt r)
+        (s2: b evt r)
+        (s3: c evt r) () =
+    let module T = struct type t0 = a
+                          type t1 = b
+                          type t2 = c
+                          type result = a * b * c
+                   end
     in
-    Async.run (fun () ->
-        DelimCont.reset (cartesian4 show s1 s2 s3 s4))
+    let module J = Join3(T) in
+    let module S = SingleWorld(struct type t = J.result end) in
+    context
+      show
+      (fun () ->
+        S.handler
+          (J.correlate
+             ~restriction: (affine (module J) 1)
+             (fun () ->
+               J.join (s1,s2,s3) (function
+                   | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
+                      S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
+
+  let testAffine3_1 () = test3 affine3_1 ()
 
 end
