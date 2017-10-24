@@ -398,7 +398,7 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
     | effect (S2.Push v) k ->
        inc_refcounts2 v;
        forkEach trigger (cartesian2 v);
-       continue k ()       
+       continue k ()
     | effect (S3.Push v) k ->
        inc_refcounts3 v;
        forkEach trigger (cartesian3 v);
@@ -416,7 +416,7 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k ->
        match !cont with
-       | Some c ->          
+       | Some c ->
           c res
        | None -> failwith "uninitialized join continuation"
 
@@ -438,7 +438,7 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
             window]
       setup ()
 end
-  
+
 module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt * T.t2 evt
                                                                      and type input = T.t0 evt r * T.t1 evt r * T.t2 evt r
                                                                      and type result = T.result evt)
@@ -754,29 +754,92 @@ module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0 evt
       setup ()
 end
 
-module Test = struct   
+let mostRecent (join: (module JOIN)) i action =
+  let module J = (val join) in
+  let module S = (val (Array.get J.slots i)) in
+  try action () with
+  | effect (S.Push v) k ->
+     S.setMail([(v,0)]);
+     continue k (S.push v)
+
+(** Restrict the ith slot of a join such that each event for i is associated at most once in a product *)
+let affine (join: (module JOIN)) i action =
+  let module J = (val join) in
+  let module Si = (val (Array.get J.slots i)) in
+  let filter_i () = Si.setMail (List.filter (fun (_,c) -> c == 0) (Si.getMail ())) in
+  (* We intercept any push effect that a join may process (= potential change of S_i inbox)
+     and simply clear out values from S_i's inbox *)
+  let wrap (slot: (module SLOT)) thunk =
+    begin
+      let module S = (val slot) in
+      let thunk () =
+        try thunk () with
+        | effect (S.Push v) k ->
+           S.push v;    (* First let upstream apply the effect. *)
+           filter_i (); (* Check what needs to be GC'd. *)
+           continue k ()
+      in thunk
+    end
+  in Array.fold_right wrap J.slots action
+
+module Test = struct
   let testStreams = begin
       let e1 = Ev (0, (1,1)) in
       let e2 = Ev (2, (2,2)) in
       let e3 = Ev (4, (3,3)) in
       let e4 = Ev (6, (4,4)) in
       let s1 = toR([e1; e2; e3; e4]) in
-      
       let e5 = Ev ("1", (5,5)) in
       let e6 = Ev ("3", (6,6)) in
       let e7 = Ev ("5", (7,7)) in
       let e8 = Ev ("7", (8,8)) in
       let s2 = toR([e5; e6; e7; e8]) in
-      
       let e9 =  Ev (3.0, (9,9)) in
       let e10 = Ev (6.0, (10,10)) in
       let e11 = Ev (9.0, (11,11)) in
       let e12 = Ev (12.0, (12,12)) in
       let s3 = toR([e9; e10; e11; e12]) in
-      (s1,s2,s3)
+      let e13 = Ev (11, (8,9)) in
+      let e14 = Ev (13, (9,10)) in
+      let e15 = Ev (17, (10,11)) in
+      let e16 = Ev (19, (11,12)) in
+      let s4 = toR([e13; e14; e15; e16]) in
+      (s1,s2,s3,s4)
     end
-                  
-  let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2: b evt r) () =
+
+  let cartesian1 (type a)
+        (show: a  evt -> string)
+        (s1: a evt r) () =
+    let module T = struct type t0 = a
+                          type result = a
+                   end
+    in
+    let module J = Join1(T) in
+    let module S = SingleWorld(struct type t = J.result end) in
+    context
+      show
+      (fun () ->
+        S.handler
+          (J.correlate (fun () ->
+               J.join s1 (function
+                   | ev ->
+                      S.yield ev))))
+
+  let testCartesian1 () =
+    let (s1,_,_,_) = testStreams in
+    let count = ref 0 in
+    let show (Ev (a, (t1,t2))) =
+      count := !count + 1;
+      Printf.sprintf "%d. <%d@[%d,%d]>" !count a t1 t2
+    in
+    Async.run (fun () ->
+        DelimCont.reset (cartesian1 show s1))
+
+
+  let cartesian2 (type a) (type b)
+        (show: (a * b) evt -> string)
+        (s1: a evt r)
+        (s2: b evt r) () =
     let module T = struct type t0 = a
                           type t1 = b
                           type result = a * b
@@ -792,9 +855,9 @@ module Test = struct
                J.join (s1,s2) (function
                    | (Ev (x,i1),Ev (y,i2)) ->
                       S.yield (Ev ((x,y), i1 |@| i2))))))
-    
+
   let testCartesian2 () =
-    let (s1,s2,_) = testStreams in
+    let (s1,s2,_,_) = testStreams in
     let count = ref 0 in
     let show (Ev ((a,b), (t1,t2))) =
       count := !count + 1;
@@ -802,11 +865,15 @@ module Test = struct
     in
     Async.run (fun () ->
         DelimCont.reset (cartesian2 show s1 s2))
-    
-  let cartesian3 (type a) (type b) (type c) (show: (a * b * c) evt -> string) (s1: a evt r) (s2: b evt r) (s3: c evt r) () =
+
+  let cartesian3 (type a) (type b) (type c)
+        (show: (a * b * c) evt -> string)
+        (s1: a evt r)
+        (s2: b evt r)
+        (s3: c evt r) () =
     let module T = struct type t0 = a
                           type t1 = b
-                          type t2 = c        
+                          type t2 = c
                           type result = a * b * c
                    end
     in
@@ -820,14 +887,49 @@ module Test = struct
                J.join (s1,s2,s3) (function
                    | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
                       S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
-    
+
   let testCartesian3 () =
-    let (s1,s2,s3) = testStreams in
+    let (s1,s2,s3,_) = testStreams in
     let count = ref 0 in
     let show (Ev ((a,b,c), (t1,t2))) =
       count := !count + 1;
-      Printf.sprintf "%d. <(%d,%s,%f)@[%d,%d]>" !count a b c t1 t2
+      Printf.sprintf "%d. <(%d,%s,%.2f)@[%d,%d]>" !count a b c t1 t2
     in
     Async.run (fun () ->
-        DelimCont.reset (cartesian3 show s1 s2 s3))    
+        DelimCont.reset (cartesian3 show s1 s2 s3))
+
+  let cartesian4 (type a) (type b) (type c) (type d)
+        (show: (a * b * c * d) evt -> string)
+        (s1: a evt r)
+        (s2: b evt r)
+        (s3: c evt r)
+        (s4: d evt r)() =
+    let module T = struct type t0 = a
+                          type t1 = b
+                          type t2 = c
+                          type t3 = d
+                          type result = a * b * c * d
+                   end
+    in
+    let module J = Join4(T) in
+    let module S = SingleWorld(struct type t = J.result end) in
+    context
+      show
+      (fun () ->
+        S.handler
+          (J.correlate (fun () ->
+               J.join (s1,s2,s3,s4) (function
+                   | (Ev (x,i1),Ev (y,i2),Ev (z,i3),Ev (w,i4)) ->
+                      S.yield (Ev ((x,y,z,w), i1 |@| i2 |@| i3 |@| i4))))))
+
+  let testCartesian4 () =
+    let (s1,s2,s3,s4) = testStreams in
+    let count = ref 0 in
+    let show (Ev ((a,b,c,d), (t1,t2))) =
+      count := !count + 1;
+      Printf.sprintf "%d. <(%d,%s,%.2f,%d)@[%d,%d]>" !count a b c d t1 t2
+    in
+    Async.run (fun () ->
+        DelimCont.reset (cartesian4 show s1 s2 s3 s4))
+
 end
