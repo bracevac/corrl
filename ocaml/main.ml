@@ -1,15 +1,15 @@
 module type DELIMCONT = sig
-  effect Shift: (('a,unit) continuation -> unit) -> 'a
-  val shift: (('a,unit) continuation -> unit) -> 'a
+  effect Shift: (('a -> unit) -> unit) -> 'a
+  val shift: (('a -> unit) -> unit) -> 'a
   val reset: (unit -> unit) -> unit
 end
-                  
+
 module DelimCont: DELIMCONT = struct
-  effect Shift: (('a,unit) continuation -> unit) -> 'a (* TODO perhaps better to wrap the cont in a function 'a -> unit *)
+  effect Shift: (('a -> unit) -> unit) -> 'a
   let shift k = perform (Shift k)
   let reset action =
     try action () with
-    | effect (Shift f) k -> f k              
+    | effect (Shift f) k -> f (fun x -> continue k x)
 end
 
 module type ASYNC = sig
@@ -24,18 +24,19 @@ module type ASYNC = sig
   val run   : (unit -> 'a) -> unit
   (** Runs the scheduler *)
   val liftPromise : 'a -> 'a promise
+  val interleaved : (unit -> unit) list -> unit
 end
-                            
+
 module Async : ASYNC = struct
 
   type 'a _promise =
     Waiting of ('a,unit) continuation list
   | Done of 'a
-          
+
   type 'a promise = 'a _promise ref
 
-  let liftPromise x = ref (Done x)                      
-                      
+  let liftPromise x = ref (Done x)
+
   effect Async : (unit -> 'a) -> 'a promise
   let async f = perform (Async f)
 
@@ -60,64 +61,64 @@ module Async : ASYNC = struct
                | Done _ -> failwith "Promise already resolved"
                end;
                dequeue ()
-                            
+
         | effect (Async f) k ->
-           let p = ref (Waiting []) in           
+           let p = ref (Waiting []) in
            enqueue (fun () -> continue k p);
-           print_string "ASYNC\n";
            fork p f
 
         | effect Yield k ->
             enqueue (continue k);
             dequeue ()
+
         | effect (Await p) k ->
             begin match !p with
             | Done v -> continue k v
             | Waiting l ->
                p := Waiting (l @ [k]);
-               dequeue () 
+               dequeue ()
             end
-    in    
+    in
     fork (ref (Waiting [])) main
 
-    
-end 
+  let interleaved thunks = failwith "interleaved not implemented" (*TODO*)
+end
 
-                     
+
 (* Time models are monoids over some time representation *)
-module type TimeModel = sig
-  type time                
-  val ( |@| ) : time -> time -> time
-  val tzero : time  
-end
-
-(* An event is evidence of something that happened at a specific time *)                      
-module type Event = sig
+module type TIMEMODEL = sig
   type time
-  type 'a evt = Ev of 'a * time
+  val ( |@| ) : time -> time -> time
+  val tzero : time
 end
 
-module Event(T: TimeModel): (Event with type time = T.time) = struct
-  type time = T.time
-  type 'a evt = Ev of 'a * time                    
+(* An event is evidence of something that happened at a specific time *)
+module type EVENT = sig
+  module Time : TIMEMODEL
+  type 'a evt = Ev of 'a * Time.time
 end
-                           
+
+module Event(T: TIMEMODEL): (EVENT with module Time = T) = struct
+  module Time = T
+  type 'a evt = Ev of 'a * T.time
+end
+
 (* Our default time model is interval-based *)
-module Interval : (TimeModel with type time = int * int) = struct
+module Interval : (TIMEMODEL with type time = int * int) = struct
   type time = int * int
   let ( |@| ) (a,b) (c,d) = (min a c, max b d)
-  let tzero = (max_int, min_int) (* representation of empty interval *)                         
+  let tzero = (max_int, min_int) (* representation of empty interval *)
 end
-                 
+
 module Evt = Event(Interval)
 
-(* Event streams *)           
+(* Event streams *)
 module Reactive = struct
   type 'a react = RNil | RCons of 'a * ('a react Async.promise)
-  type 'a r = 'a react Async.promise                                
-                                
+  type 'a r = 'a react Async.promise
+
   let toR: 'a list -> 'a r = fun l ->
-    let rec _toR = 
+    let rec _toR =
     function
     | [] -> RNil
     | x::xs -> RCons (x, (Async.liftPromise (_toR xs)))
@@ -126,11 +127,12 @@ module Reactive = struct
   let rec eat f stream =
     match Async.await stream with
     | RCons (hd, tl) -> (f hd); eat f tl
-    | RNil -> ()        
+    | RNil -> ()
 end
 
 open Evt
-open Reactive       
+open Evt.Time
+open Reactive
 
 module type SomeT = sig
   type t
@@ -144,7 +146,7 @@ module type SINGLEWORLD = sig
   val yield: t -> unit
   val cancel: unit -> unit
 
-  val handler: (unit -> 'a) -> t option  
+  val handler: (unit -> 'a) -> t option
 end
 
 module SingleWorld(T: SomeT): (SINGLEWORLD with type t = T.t) = struct
@@ -153,17 +155,17 @@ module SingleWorld(T: SomeT): (SINGLEWORLD with type t = T.t) = struct
   effect Cancel : unit
 
   let yield x = perform (Yield x)
-  let cancel () = perform Cancel              
-         
+  let cancel () = perform Cancel
+
   let handler action =
     match action () with
-    | x -> None  
+    | x -> None
     | effect (Yield v) _ -> Some v
-    | effect Cancel _ -> None                      
+    | effect Cancel _ -> None
 end
-                  
+
 module ManyWorlds = struct
-  effect Fork : bool  
+  effect Fork : bool
   let fork () = perform Fork
 
   (* TODO can we have this mutability-free? Seems we need shallow handlers. *)
@@ -182,7 +184,7 @@ module ManyWorlds = struct
        next ()
     end
 
-  let handler onDone action = run onDone (ref []) action     
+  let handler onDone action = run onDone (ref []) action
 end
 
 let context (type a) (show: a -> string) action =
@@ -190,21 +192,21 @@ let context (type a) (show: a -> string) action =
     | None -> ()
     | Some x -> print_string (show x); print_newline ()
   in
-  ManyWorlds.handler onDone action                  
+  ManyWorlds.handler onDone action
 
 (* A slot x represents a binding 'x from ...' inside of a correlate block.
    Each binding has specific effects attached to it (generative effects).
-   *)                              
+   *)
 module type SLOT = sig
   (* The type of event values this slot binds *)
   type t
-  (* Push event notification *)       
+  (* Push event notification *)
   effect Push: t -> unit
   val push: t -> unit
-  (* Retrieve mailbox state, mail is ref-counted *)                      
+  (* Retrieve mailbox state, mail is ref-counted *)
   effect GetMail: (t * int) list
   val getMail: unit -> (t * int) list
-  (* Set mailbox state *)                         
+  (* Set mailbox state *)
   effect SetMail: (t * int) list -> unit
   val setMail: (t * int) list -> unit
   val stateHandler: (unit -> 'a) -> 'a
@@ -216,7 +218,7 @@ module Slot(T: SomeT): (SLOT with type t = T.t) = struct
   effect Push: t -> unit
   let push v = perform (Push v)
   effect GetMail: (t * int) list
-  let getMail () = perform GetMail                     
+  let getMail () = perform GetMail
   effect SetMail: (t * int) list -> unit
   let setMail l = perform (SetMail l)
 
@@ -230,41 +232,41 @@ module Slot(T: SomeT): (SLOT with type t = T.t) = struct
     try action () with
     | effect (Push x) k ->
        setMail ((x,0) :: (getMail ()));
-       continue k (push x)                              
+       continue k (push x)
 end
 
 type slots = (module SLOT) array
 
 let with_h hs action =
   let comp h thnk = (fun () -> (h thnk)) in
-  List.fold_right comp hs action                  
-           
+  List.fold_right comp hs action
+
 let rec forkEach f = function
   | [] -> ()
   | x::xs -> if (ManyWorlds.fork ()) then (f x) else (forkEach f xs)
 
-let flatMap f l = List.concat (List.map f l)               
+let flatMap f l = List.concat (List.map f l)
 
 let rec update_first p f = function
   | [] -> []
   | x::xs ->
      if (p x)
      then (f x) :: xs
-     else x :: (update_first p f xs)       
+     else x :: (update_first p f xs)
 
-let inc_snd n l = List.map (fun (y,c) -> (y,c+n)) l    
+let inc_snd n l = List.map (fun (y,c) -> (y,c+n)) l
 
 module type JOIN = sig
   type input
   type joined
-  type result     
+  type result
   val slots: slots
-  effect Join: input -> joined
-  val join: input -> joined                 
+  effect Join: (input * (joined -> unit)) -> unit
+  val join: input -> (joined -> unit) -> unit
   effect Trigger: joined -> unit
   val trigger: joined -> unit
-  effect SetCont: (joined, unit) continuation -> unit  
-  val setCont: (joined, unit) continuation -> unit
+  effect SetCont: (joined -> unit) -> unit
+  val setCont: (joined -> unit) -> unit
   val assemble: (unit -> unit) -> unit (* TODO: generalize return type? *)
   val ambientState: (unit -> unit) -> unit
   val correlate :
@@ -272,26 +274,27 @@ module type JOIN = sig
     ?restriction:((unit -> unit) -> unit) ->
     (unit -> unit) -> unit -> unit
 end
-                
-(*lame! can we have a nice arity-abstracting join definition for any n?*)                
+
+(*lame! can we have a nice arity-abstracting join definition for any n?*)
 module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt * T.t2 evt * T.t3 evt
                                                                              and type input = T.t0 evt r * T.t1 evt r * T.t2 evt r * T.t3 evt r
-                                                                             and type result = T.result evt) = struct
+                                                                             and type result = T.result evt)
+  = struct
   module S0 = Slot(struct type t = T.t0 evt end)
   module S1 = Slot(struct type t = T.t1 evt end)
   module S2 = Slot(struct type t = T.t2 evt end)
   module S3 = Slot(struct type t = T.t3 evt end)
   type joined = S0.t * S1.t * S2.t * S3.t
-  type result = T.result evt             
+  type result = T.result evt
   let slots: slots = [|(module S0);(module S1);(module S2);(module S3)|]
-  type input = S0.t r * S1.t r * S2.t r * S3.t r              
-  effect Join: input -> joined
-  let join sp = perform (Join sp)                                    
+  type input = S0.t r * S1.t r * S2.t r * S3.t r
+  effect Join: (input * (joined -> unit)) -> unit
+  let join sp f = perform (Join (sp, f))
   effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
-  effect SetCont: (joined, unit) continuation -> unit
-  let setCont c = perform (SetCont c)                 
-                
+  effect SetCont: (joined -> unit) -> unit
+  let setCont c = perform (SetCont c)
+
   module Aux = struct
     let _cart f thnk1 thnk2 thnk3 x =
       flatMap
@@ -299,32 +302,32 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
           flatMap
             (fun z ->
               List.map (fun w -> f (x,y,z,w))
-                (thnk3 ())) 
+                (thnk3 ()))
             (thnk2 ()))
         (thnk1 ())
 
-    let shuffle0 p = p                 
+    let shuffle0 p = p
     let shuffle1 (x,y,z,w) = (y,x,z,w)
     let shuffle2 (x,y,z,w) = (y,z,x,w)
     let shuffle3 (x,y,z,w) = (y,z,w,x)
 
-    (* mailbox_i, without the refcounts *)                       
+    (* mailbox_i, without the refcounts *)
     let mail0 () = List.map fst (S0.getMail())
     let mail1 () = List.map fst (S1.getMail())
     let mail2 () = List.map fst (S2.getMail())
     let mail3 () = List.map fst (S3.getMail())
-                    
-    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
+
+    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)
     let refcounts0 () =
       (List.length (S1.getMail ())) * (List.length (S2.getMail())) * (List.length (S3.getMail ()))
     let refcounts1 () =
       (List.length (S0.getMail ())) * (List.length (S2.getMail())) * (List.length (S3.getMail ()))
     let refcounts2 () =
-      (List.length (S0.getMail ())) * (List.length (S1.getMail())) * (List.length (S3.getMail ()))      
+      (List.length (S0.getMail ())) * (List.length (S1.getMail())) * (List.length (S3.getMail ()))
     let refcounts3 () =
       (List.length (S0.getMail ())) * (List.length (S1.getMail())) * (List.length (S2.getMail ()))
-    (* The effect of a S_i.Push x on each mailbox_k *)              
-    let inc_refcounts0 x = 
+    (* The effect of a S_i.Push x on each mailbox_k *)
+    let inc_refcounts0 x =
       S1.setMail ((inc_snd 1) (S1.getMail()));
       S2.setMail ((inc_snd 1) (S2.getMail()));
       S3.setMail ((inc_snd 1) (S3.getMail()));
@@ -362,16 +365,16 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
                     (fun () -> Reactive.eat S1.push s1);
                     (fun () -> Reactive.eat S2.push s2);
                     (fun () -> Reactive.eat S3.push s3)] in
-      List.map Async.async thunks
+      List.iter (fun f -> f ()) thunks
   end
-  open Aux           
+  open Aux
 
-  (* We stage for each slot S_i a function cartesian_i, 
-     which takes an event notification x of type S_i.t and computes 
+  (* We stage for each slot S_i a function cartesian_i,
+     which takes an event notification x of type S_i.t and computes
      the cross-product of x and the contents of the mailboxes for the remaining
      slots S_k, where k =/= i. The typical use case is interpreting the
-     S_i.Push effect: Compute the collection cartesian_i and pass its 
-     elements to the Complete effect, i.e., trigger the pattern body. *)           
+     S_i.Push effect: Compute the collection cartesian_i and pass its
+     elements to the Complete effect, i.e., trigger the pattern body. *)
   let cartesian0: S0.t -> joined list =
     (_cart shuffle0 mail1 mail2 mail3)
   let cartesian1: S1.t -> joined list =
@@ -381,46 +384,47 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
   let cartesian3: S3.t -> joined list =
     (_cart shuffle3 mail0 mail1 mail2)
 
-  (* The final stage in the handler stack, implementing the cartesian semantics *)  
+  (* The final stage in the handler stack, implementing the cartesian semantics *)
   let assemble action =
     try action () with
-    | effect (S0.Push v) _ ->
+    | effect (S0.Push v) k ->
        inc_refcounts0 v;
-       forkEach trigger (cartesian0 v)       
-    | effect (S1.Push v) _ ->
+       forkEach trigger (cartesian0 v);
+       continue k ()
+    | effect (S1.Push v) k ->
        inc_refcounts1 v;
-       forkEach trigger (cartesian1 v)
-    | effect (S2.Push v) _ ->
+       forkEach trigger (cartesian1 v);
+       continue k ()
+    | effect (S2.Push v) k ->
        inc_refcounts2 v;
-       forkEach trigger (cartesian2 v)       
-    | effect (S3.Push v) _ ->
+       forkEach trigger (cartesian2 v);
+       continue k ()       
+    | effect (S3.Push v) k ->
        inc_refcounts3 v;
-       forkEach trigger (cartesian3 v)
+       forkEach trigger (cartesian3 v);
+       continue k ()
 
-  (* Handler for the ambient mailbox state *)                            
+  (* Handler for the ambient mailbox state *)
   let ambientState (action: unit -> unit) =
     let action =
       with_h [S0.stateHandler;
               S1.stateHandler;
               S2.stateHandler;
-              S3.stateHandler] action in   
-    let cont: (joined, unit) continuation option ref = ref None in
+              S3.stateHandler] action in
+    let cont: (joined -> unit) option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
-    | effect (Trigger res) k -> 
+    | effect (Trigger res) k ->
        match !cont with
-       | Some c ->
-          (* IMPORTANT: we assume that c works with forking, does not do anything funky with resources *)
-          (* TODO: make this a thunk instead? *)
-          (* cont := Some (Obj.clone_continuation c);  *)          
-          continue c res
-       | None -> failwith "uninitialized join continuation"          
-               
+       | Some c ->          
+          c res
+       | None -> failwith "uninitialized join continuation"
+
   let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
     let setup () =
       try pattern () with
-      | effect (Join streams) k ->
-           setCont k;
+      | effect (Join (streams, c)) k ->
+           setCont c;
            let _ = eat_all streams in (* TODO keep the promises? *)
            ()
     in
@@ -434,51 +438,52 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
             window]
       setup ()
 end
-                                                               
+  
 module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt * T.t2 evt
                                                                      and type input = T.t0 evt r * T.t1 evt r * T.t2 evt r
-                                                                     and type result = T.result evt) = struct
+                                                                     and type result = T.result evt)
+  = struct
   module S0 = Slot(struct type t = T.t0 evt end)
   module S1 = Slot(struct type t = T.t1 evt end)
   module S2 = Slot(struct type t = T.t2 evt end)
   type joined = S0.t * S1.t * S2.t
   type result = T.result evt
   let slots: slots = [|(module S0);(module S1);(module S2)|]
-  type input = S0.t r * S1.t r * S2.t r     
-  effect Join: input -> joined
-  let join sp = perform (Join sp)                                                           
+  type input = S0.t r * S1.t r * S2.t r
+  effect Join: (input * (joined -> unit)) -> unit
+  let join sp f = perform (Join (sp,f))
   effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
-  effect SetCont: (joined, unit) continuation -> unit
+  effect SetCont: (joined -> unit) -> unit
   let setCont c = perform (SetCont c)
-                
+
   module Aux = struct
     let _cart f thnk1 thnk2 x =
       flatMap
         (fun y ->
           List.map (fun z -> f (x,y,z))
-            (thnk2 ())) 
+            (thnk2 ()))
         (thnk1 ())
-  
 
-    let shuffle0 p = p                 
+
+    let shuffle0 p = p
     let shuffle1 (x,y,z) = (y,x,z)
     let shuffle2 (x,y,z) = (y,z,x)
 
-    (* mailbox_i, without the refcounts *)                       
+    (* mailbox_i, without the refcounts *)
     let mail0 () = List.map fst (S0.getMail())
     let mail1 () = List.map fst (S1.getMail())
     let mail2 () = List.map fst (S2.getMail())
-                    
-    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
+
+    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)
     let refcounts0 () =
-      (List.length (S1.getMail ())) * (List.length (S2.getMail())) 
+      (List.length (S1.getMail ())) * (List.length (S2.getMail()))
     let refcounts1 () =
-      (List.length (S0.getMail ())) * (List.length (S2.getMail()))  
+      (List.length (S0.getMail ())) * (List.length (S2.getMail()))
     let refcounts2 () =
-      (List.length (S0.getMail ())) * (List.length (S1.getMail()))        
-    (* The effect of a S_i.Push x on each mailbox_k *)              
-    let inc_refcounts0 x = 
+      (List.length (S0.getMail ())) * (List.length (S1.getMail()))
+    (* The effect of a S_i.Push x on each mailbox_k *)
+    let inc_refcounts0 x =
       S1.setMail ((inc_snd 1) (S1.getMail()));
       S2.setMail ((inc_snd 1) (S2.getMail()));
       S0.setMail (update_first
@@ -504,16 +509,16 @@ module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type jo
       let thunks = [(fun () -> Reactive.eat S0.push s0);
                     (fun () -> Reactive.eat S1.push s1);
                     (fun () -> Reactive.eat S2.push s2)] in
-      List.map Async.async thunks
+      List.iter (fun f -> f ()) thunks
   end
-  open Aux           
+  open Aux
 
-  (* We stage for each slot S_i a function cartesian_i, 
-     which takes an event notification x of type S_i.t and computes 
+  (* We stage for each slot S_i a function cartesian_i,
+     which takes an event notification x of type S_i.t and computes
      the cross-product of x and the contents of the mailboxes for the remaining
      slots S_k, where k =/= i. The typical use case is interpreting the
-     S_i.Push effect: Compute the collection cartesian_i and pass its 
-     elements to the Complete effect, i.e., trigger the pattern body. *)           
+     S_i.Push effect: Compute the collection cartesian_i and pass its
+     elements to the Complete effect, i.e., trigger the pattern body. *)
   let cartesian0: S0.t -> joined list =
     (_cart shuffle0 mail1 mail2)
   let cartesian1: S1.t -> joined list =
@@ -521,39 +526,42 @@ module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type jo
   let cartesian2: S2.t -> joined list =
     (_cart shuffle2 mail0 mail1)
 
-  (* The final stage in the handler stack, implementing the cartesian semantics *)  
+  (* The final stage in the handler stack, implementing the cartesian semantics *)
   let assemble action =
     try action () with
-    | effect (S0.Push v) _ ->
+    | effect (S0.Push v) k ->
        inc_refcounts0 v;
-       forkEach trigger (cartesian0 v)       
-    | effect (S1.Push v) _ ->
+       forkEach trigger (cartesian0 v);
+       continue k ()
+    | effect (S1.Push v) k ->
        inc_refcounts1 v;
-       forkEach trigger (cartesian1 v)
-    | effect (S2.Push v) _ ->
+       forkEach trigger (cartesian1 v);
+       continue k ()
+    | effect (S2.Push v) k ->
        inc_refcounts2 v;
-       forkEach trigger (cartesian2 v)       
+       forkEach trigger (cartesian2 v);
+       continue k ()
 
-  (* Handler for the ambient mailbox state *)                            
+  (* Handler for the ambient mailbox state *)
   let ambientState action =
     let action =
       with_h [S0.stateHandler;
               S1.stateHandler;
-              S2.stateHandler] action in   
-    let cont: (joined, unit) continuation option ref = ref None in
+              S2.stateHandler] action in
+    let cont: (joined -> unit) option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
-    | effect (Trigger res) k -> 
+    | effect (Trigger res) k ->
        match !cont with
        | Some c ->
-          continue c res
+          c res
        | None -> failwith "uninitialized join continuation"
 
-  let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =               
+  let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
     let setup () =
       try pattern () with
-      | effect (Join streams) k ->
-           setCont k;
+      | effect (Join (streams,c)) k ->
+           setCont c;
            let _ = eat_all streams in (* TODO keep the promises? *)
            ()
     in
@@ -564,7 +572,7 @@ module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type jo
             S1.forAll;
             S2.forAll;
             window]
-      setup ()              
+      setup ()
 end
 
 module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt
@@ -577,33 +585,33 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
   let slots: slots = [|(module S0);(module S1)|]
   type input = S0.t r * S1.t r
   type result = T.result evt
-  effect Join: input -> joined
-  let join sp = perform (Join sp)                                    
+  effect Join: (input * (joined -> unit)) -> unit
+  let join sp f = perform (Join (sp,f))
   effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
-  effect SetCont: (joined, unit) continuation -> unit
+  effect SetCont: (joined -> unit) -> unit
   let setCont c = perform (SetCont c)
 
   module Aux = struct
     let _cart f thnk1 x =
       List.map
-        (fun y -> f (x,y))        
-        (thnk1 ())  
+        (fun y -> f (x,y))
+        (thnk1 ())
 
-    let shuffle0 p = p                 
+    let shuffle0 p = p
     let shuffle1 (x,y) = (y,x)
 
-    (* mailbox_i, without the refcounts *)                       
+    (* mailbox_i, without the refcounts *)
     let mail0 () = List.map fst (S0.getMail())
     let mail1 () = List.map fst (S1.getMail())
-                    
-    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
+
+    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)
     let refcounts0 () =
-      (List.length (S1.getMail ())) 
+      (List.length (S1.getMail ()))
     let refcounts1 () =
-      (List.length (S0.getMail ())) 
-    (* The effect of a S_i.Push x on each mailbox_k *)              
-    let inc_refcounts0 x = 
+      (List.length (S0.getMail ()))
+    (* The effect of a S_i.Push x on each mailbox_k *)
+    let inc_refcounts0 x =
       S1.setMail ((inc_snd 1) (S1.getMail()));
       S0.setMail (update_first
                     (fun (y,_) -> y == x)
@@ -618,54 +626,53 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
     let eat_all (s0,s1) =
       let thunks = [(fun () -> Reactive.eat S0.push s0);
                     (fun () -> Reactive.eat S1.push s1)] in
-      print_string "EAT\n";
-      let res = List.map Async.async thunks in
-      print_string "DONE\n"; res
+      (* let res = Async.interleaved thunks in *) (*TODO make interleaved *)
+      List.iter (fun f -> f ()) thunks;
   end
-  open Aux           
+  open Aux
 
-  (* We stage for each slot S_i a function cartesian_i, 
-     which takes an event notification x of type S_i.t and computes 
+  (* We stage for each slot S_i a function cartesian_i,
+     which takes an event notification x of type S_i.t and computes
      the cross-product of x and the contents of the mailboxes for the remaining
      slots S_k, where k =/= i. The typical use case is interpreting the
-     S_i.Push effect: Compute the collection cartesian_i and pass its 
-     elements to the Complete effect, i.e., trigger the pattern body. *)           
+     S_i.Push effect: Compute the collection cartesian_i and pass its
+     elements to the Complete effect, i.e., trigger the pattern body. *)
   let cartesian0: S0.t -> joined list =
     (_cart shuffle0 mail1)
   let cartesian1: S1.t -> joined list =
     (_cart shuffle1 mail0)
 
-  (* The final stage in the handler stack, implementing the cartesian semantics *)  
+  (* The final stage in the handler stack, implementing the cartesian semantics *)
   let assemble action =
     try action () with
-    | effect (S0.Push v) _ ->
+    | effect (S0.Push v) k ->
        inc_refcounts0 v;
-       forkEach trigger (cartesian0 v)       
-    | effect (S1.Push v) _ ->
+       forkEach trigger (cartesian0 v);
+       continue k ()
+    | effect (S1.Push v) k ->
        inc_refcounts1 v;
-       forkEach trigger (cartesian1 v)
+       forkEach trigger (cartesian1 v);
+       continue k ()
 
-  (* Handler for the ambient mailbox state *)                            
-  let ambientState action =    
+  (* Handler for the ambient mailbox state *)
+  let ambientState action =
     let action =
       with_h [S0.stateHandler;
-              S1.stateHandler] action in   
-    let cont: (joined, unit) continuation option ref = ref None in
+              S1.stateHandler] action in
+    let cont: (joined -> unit) option ref = ref None in (*TODO avoid mutability*)
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
-    | effect (Trigger res) k -> 
+    | effect (Trigger res) k ->
        match !cont with
        | Some c ->
-          continue c res
+          c res
        | None -> failwith "uninitialized join continuation"
 
   let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
     let setup () =
       try pattern () with
-      | effect (Join streams) k ->
-           print_string "I'm here\n";
-           setCont k;
-           print_string "Here, too\n";
+      | effect (Join (streams, callback)) k ->
+           setCont callback;
            let _ = eat_all streams in (* TODO keep the promises? *)
            ()
     in
@@ -675,7 +682,7 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
             S0.forAll;
             S1.forAll;
             window]
-      setup ()              
+      setup ()
 end
 
 module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0 evt
@@ -687,54 +694,55 @@ module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0 evt
   let slots: slots = [|(module S0)|]
   type input = S0.t r
   type result = T.result evt
-  effect Join: input -> joined
-  let join sp = perform (Join sp)                                    
+  effect Join: (input * (joined -> unit)) -> unit
+  let join sp f = perform (Join (sp,f))
   effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
-  effect SetCont: (joined, unit) continuation -> unit
+  effect SetCont: (joined -> unit) -> unit
   let setCont c = perform (SetCont c)
-                
+
   module Aux = struct
-    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)  
+    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)
     let refcounts0 () = 1
-    (* The effect of a S_i.Push x on each mailbox_k *)              
-    let inc_refcounts0 x = 
+    (* The effect of a S_i.Push x on each mailbox_k *)
+    let inc_refcounts0 x =
       S0.setMail (update_first
                     (fun (y,_) -> y == x)
                     (fun (x,c) -> (x,c+(refcounts0 ())))
                     (S0.getMail ()))
     let eat_all s0 =
       let thunks = [(fun () -> Reactive.eat S0.push s0)] in
-      List.map Async.async thunks  
+      List.iter (fun f -> f ()) thunks
   end
-  open Aux           
+  open Aux
 
   let cartesian0: S0.t -> joined list = (fun x -> [x])
 
-  (* The final stage in the handler stack, implementing the cartesian semantics *)  
+  (* The final stage in the handler stack, implementing the cartesian semantics *)
   let assemble action =
     try action () with
-    | effect (S0.Push v) _ ->
+    | effect (S0.Push v) k ->
        inc_refcounts0 v;
-       forkEach trigger (cartesian0 v)       
+       forkEach trigger (cartesian0 v);
+       continue k ()
 
-  (* Handler for the ambient mailbox state *)                            
+  (* Handler for the ambient mailbox state *)
   let ambientState action =
     let action = (fun () -> S0.stateHandler action) in
-    let cont: (joined, unit) continuation option ref = ref None in
+    let cont: (joined -> unit) option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
-    | effect (Trigger res) k -> 
+    | effect (Trigger res) k ->
        match !cont with
        | Some c ->
-          continue c res
+          c res
        | None -> failwith "uninitialized join continuation"
 
   let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
     let setup () =
       try pattern () with
-      | effect (Join streams) k ->
-         setCont k;
+      | effect (Join (streams, f)) k ->
+         setCont f;
          let _ = eat_all streams in (* TODO keep the promises? *)
          ()
     in
@@ -743,14 +751,14 @@ module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0 evt
             restriction;
             S0.forAll;
             window]
-      setup ()               
-end                                                                                                    
-     
+      setup ()
+end
+
 let testStreams = begin
   let e1 = Ev (0, (1,1)) in
-  let e2 = Ev (2, (2,2)) in 
-  let e3 = Ev (4, (3,3)) in 
-  let e4 = Ev (6, (4,4)) in 
+  let e2 = Ev (2, (2,2)) in
+  let e3 = Ev (4, (3,3)) in
+  let e4 = Ev (6, (4,4)) in
   let s1 = toR([e1; e2; e3; e4]) in
 
   let e5 = Ev ("1", (5,5)) in
@@ -760,7 +768,7 @@ let testStreams = begin
   let s2 = toR([e5; e6; e7; e8]) in
   (s1,s2)
   end
-    
+
 let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2: b evt r) () =
   let module T = struct type t0 = a
                         type t1 = b
@@ -772,16 +780,16 @@ let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2
   context
     show
     (fun () ->
-      S.handler 
+      S.handler
         (J.correlate (fun () ->
-             let (Ev (x,i1),Ev (y,i2)) = J.join (s1,s2) in               
-             S.yield (Ev ((x,y), i1 |@| i2)))))
-  
+             J.join (s1,s2) (function
+                 | (Ev (x,i1),Ev (y,i2)) ->
+                    S.yield (Ev ((x,y), i1 |@| i2))))))
+
 let testCartesian2 () =
   let (s1,s2) = testStreams in
   let show (Ev ((a,b), (t1,t2))) =
-    Printf.sprintf "<(%d,%s)@[%d,%d]>\n" a b t1 t2
+    Printf.sprintf "<(%d,%s)@[%d,%d]>" a b t1 t2
   in
   Async.run (fun () ->
       DelimCont.reset (cartesian2 show s1 s2))
-                    
