@@ -754,42 +754,80 @@ module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0 evt
       setup ()
 end
 
-let testStreams = begin
-  let e1 = Ev (0, (1,1)) in
-  let e2 = Ev (2, (2,2)) in
-  let e3 = Ev (4, (3,3)) in
-  let e4 = Ev (6, (4,4)) in
-  let s1 = toR([e1; e2; e3; e4]) in
-
-  let e5 = Ev ("1", (5,5)) in
-  let e6 = Ev ("3", (6,6)) in
-  let e7 = Ev ("5", (7,7)) in
-  let e8 = Ev ("7", (8,8)) in
-  let s2 = toR([e5; e6; e7; e8]) in
-  (s1,s2)
-  end
-
-let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2: b evt r) () =
-  let module T = struct type t0 = a
-                        type t1 = b
-                        type result = a * b
-                 end
-  in
-  let module J = Join2(T) in
-  let module S = SingleWorld(struct type t = J.result end) in
-  context
-    show
-    (fun () ->
-      S.handler
-        (J.correlate (fun () ->
-             J.join (s1,s2) (function
-                 | (Ev (x,i1),Ev (y,i2)) ->
-                    S.yield (Ev ((x,y), i1 |@| i2))))))
-
-let testCartesian2 () =
-  let (s1,s2) = testStreams in
-  let show (Ev ((a,b), (t1,t2))) =
-    Printf.sprintf "<(%d,%s)@[%d,%d]>" a b t1 t2
-  in
-  Async.run (fun () ->
-      DelimCont.reset (cartesian2 show s1 s2))
+module Test = struct   
+  let testStreams = begin
+      let e1 = Ev (0, (1,1)) in
+      let e2 = Ev (2, (2,2)) in
+      let e3 = Ev (4, (3,3)) in
+      let e4 = Ev (6, (4,4)) in
+      let s1 = toR([e1; e2; e3; e4]) in
+      
+      let e5 = Ev ("1", (5,5)) in
+      let e6 = Ev ("3", (6,6)) in
+      let e7 = Ev ("5", (7,7)) in
+      let e8 = Ev ("7", (8,8)) in
+      let s2 = toR([e5; e6; e7; e8]) in
+      
+      let e9 =  Ev (3.0, (9,9)) in
+      let e10 = Ev (6.0, (10,10)) in
+      let e11 = Ev (9.0, (11,11)) in
+      let e12 = Ev (12.0, (12,12)) in
+      let s3 = toR([e9; e10; e11; e12]) in
+      (s1,s2,s3)
+    end
+                  
+  let cartesian2 (type a) (type b) (show: (a * b) evt -> string) (s1: a evt r) (s2: b evt r) () =
+    let module T = struct type t0 = a
+                          type t1 = b
+                          type result = a * b
+                   end
+    in
+    let module J = Join2(T) in
+    let module S = SingleWorld(struct type t = J.result end) in
+    context
+      show
+      (fun () ->
+        S.handler
+          (J.correlate (fun () ->
+               J.join (s1,s2) (function
+                   | (Ev (x,i1),Ev (y,i2)) ->
+                      S.yield (Ev ((x,y), i1 |@| i2))))))
+    
+  let testCartesian2 () =
+    let (s1,s2,_) = testStreams in
+    let count = ref 0 in
+    let show (Ev ((a,b), (t1,t2))) =
+      count := !count + 1;
+      Printf.sprintf "%d. <(%d,%s)@[%d,%d]>" !count a b t1 t2
+    in
+    Async.run (fun () ->
+        DelimCont.reset (cartesian2 show s1 s2))
+    
+  let cartesian3 (type a) (type b) (type c) (show: (a * b * c) evt -> string) (s1: a evt r) (s2: b evt r) (s3: c evt r) () =
+    let module T = struct type t0 = a
+                          type t1 = b
+                          type t2 = c        
+                          type result = a * b * c
+                   end
+    in
+    let module J = Join3(T) in
+    let module S = SingleWorld(struct type t = J.result end) in
+    context
+      show
+      (fun () ->
+        S.handler
+          (J.correlate (fun () ->
+               J.join (s1,s2,s3) (function
+                   | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
+                      S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
+    
+  let testCartesian3 () =
+    let (s1,s2,s3) = testStreams in
+    let count = ref 0 in
+    let show (Ev ((a,b,c), (t1,t2))) =
+      count := !count + 1;
+      Printf.sprintf "%d. <(%d,%s,%f)@[%d,%d]>" !count a b c t1 t2
+    in
+    Async.run (fun () ->
+        DelimCont.reset (cartesian3 show s1 s2 s3))    
+end
