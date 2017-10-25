@@ -332,7 +332,7 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
       S2.setMail ((inc_snd 1) (S2.getMail()));
       S3.setMail ((inc_snd 1) (S3.getMail()));
       S0.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts0 ())))
                     (S0.getMail ()))
     let inc_refcounts1 x =
@@ -340,7 +340,7 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
       S2.setMail ((inc_snd 1) (S2.getMail()));
       S3.setMail ((inc_snd 1) (S3.getMail()));
       S1.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts1 ())))
                     (S1.getMail ()))
     let inc_refcounts2 x =
@@ -348,7 +348,7 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
       S1.setMail ((inc_snd 1) (S1.getMail()));
       S3.setMail ((inc_snd 1) (S3.getMail()));
       S2.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts2 ())))
                     (S2.getMail ()))
     let inc_refcounts3 x =
@@ -356,7 +356,7 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
       S1.setMail ((inc_snd 1) (S1.getMail()));
       S2.setMail ((inc_snd 1) (S2.getMail()));
       S3.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts3 ())))
                     (S3.getMail ()))
 
@@ -487,21 +487,21 @@ module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type jo
       S1.setMail ((inc_snd 1) (S1.getMail()));
       S2.setMail ((inc_snd 1) (S2.getMail()));
       S0.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts0 ())))
                     (S0.getMail ()))
     let inc_refcounts1 x =
       S0.setMail ((inc_snd 1) (S0.getMail()));
       S2.setMail ((inc_snd 1) (S2.getMail()));
       S1.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts1 ())))
                     (S1.getMail ()))
     let inc_refcounts2 x =
       S0.setMail ((inc_snd 1) (S0.getMail()));
       S1.setMail ((inc_snd 1) (S1.getMail()));
       S2.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts2 ())))
                     (S2.getMail ()))
 
@@ -614,13 +614,13 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
     let inc_refcounts0 x =
       S1.setMail ((inc_snd 1) (S1.getMail()));
       S0.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts0 ())))
                     (S0.getMail ()))
     let inc_refcounts1 x =
       S0.setMail ((inc_snd 1) (S0.getMail()));
       S1.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts1 ())))
                     (S1.getMail ()))
     let eat_all (s0,s1) =
@@ -707,7 +707,7 @@ module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0 evt
     (* The effect of a S_i.Push x on each mailbox_k *)
     let inc_refcounts0 x =
       S0.setMail (update_first
-                    (fun (y,_) -> y == x)
+                    (fun (y,_) -> y = x)
                     (fun (x,c) -> (x,c+(refcounts0 ())))
                     (S0.getMail ()))
     let eat_all s0 =
@@ -766,7 +766,7 @@ let mostRecent (join: (module JOIN)) i action =
 let affine (join: (module JOIN)) i action =
   let module J = (val join) in
   let module Si = (val (Array.get J.slots i)) in
-  let filter_i () = Si.setMail (List.filter (fun (_,c) -> c == 0) (Si.getMail ())) in
+  let filter_i () = Si.setMail (List.filter (fun (_,c) -> c = 0) (Si.getMail ())) in
   (* We intercept any push effect that a join may process (= potential change of S_i inbox)
      and simply clear out values from S_i's inbox *)
   let wrap (slot: (module SLOT)) thunk =
@@ -919,7 +919,7 @@ module Test = struct
         (s2: b evt r)
         (s3: c evt r)
         (s4: d evt r)() =
-    let module T = struct type t0 = a
+     let module T = struct type t0 = a
                           type t1 = b
                           type t2 = c
                           type t3 = d
