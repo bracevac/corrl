@@ -194,6 +194,38 @@ let context (type a) (show: a -> string) action =
   in
   ManyWorlds.handler onDone action
 
+module Count = struct
+  (* TODO prohibit negative values *)
+  type t = Inf | Fin of int
+  let map f = function
+    | Inf -> Inf
+    | Fin i -> Fin (f i)
+  let flatMap f = function
+    | Inf -> Inf
+    | Fin i -> (f i)
+  let inc n = map (fun i -> i + 1) n
+  let inc_by num n = map (fun i -> i + num) n
+  let dec n = map (fun i -> i - 1) n
+  let dec_by num n = map (fun i -> i - num) n
+  let add n m = flatMap
+                  (fun i ->
+                    map (fun j -> i + j) m) n
+  let sub n m = flatMap
+                  (fun i ->
+                    map (fun j -> i - j) m) n
+  let lt n m = match (n,m) with
+    | (_, Inf) -> true
+    | (Fin i, Fin j) -> i < j
+    | _ -> false
+  let lte n m = (n = m) || (lt n m)
+  let gt n m = not (lte n m)
+  let gte n m = (n = m) || (gt n m)
+  let lt_i i n = lt (Fin i) n
+  let lte_i i n = lte (Fin i) n
+  let gt_i i n = gt (Fin i) n
+  let gte_i i n = gte (Fin i) n
+end
+
 (* A slot x represents a binding 'x from ...' inside of a correlate block.
    Each binding has specific effects attached to it (generative effects).
    *)
@@ -203,12 +235,12 @@ module type SLOT = sig
   (* Push event notification *)
   effect Push: t -> unit
   val push: t -> unit
-  (* Retrieve mailbox state, mail is ref-counted *)
-  effect GetMail: (t * int) list
-  val getMail: unit -> (t * int) list
+  (* Retrieve mailbox state, mail has a lifetime counter *)
+  effect GetMail: (t * (Count.t ref)) list
+  val getMail: unit -> (t * (Count.t ref)) list
   (* Set mailbox state *)
-  effect SetMail: (t * int) list -> unit
-  val setMail: (t * int) list -> unit
+  effect SetMail: (t * (Count.t ref)) list -> unit
+  val setMail: (t * (Count.t ref)) list -> unit
   val stateHandler: (unit -> 'a) -> 'a
   val forAll: (unit -> 'a) -> 'a
 end
@@ -217,13 +249,13 @@ module Slot(T: SomeT): (SLOT with type t = T.t) = struct
   type t = T.t
   effect Push: t -> unit
   let push v = perform (Push v)
-  effect GetMail: (t * int) list
+  effect GetMail: (t * (Count.t ref)) list
   let getMail () = perform GetMail
-  effect SetMail: (t * int) list -> unit
+  effect SetMail: (t * (Count.t ref)) list -> unit
   let setMail l = perform (SetMail l)
 
   let stateHandler action =
-    let mbox: (t * int) list ref = ref [] in (* TODO avoid mutability *)
+    let mbox: (t * (Count.t ref)) list ref = ref [] in (* TODO avoid mutability *)
     try action () with
     | effect GetMail k -> continue k !mbox
     | effect (SetMail l) k -> mbox := l; continue k ()
@@ -231,7 +263,7 @@ module Slot(T: SomeT): (SLOT with type t = T.t) = struct
   let forAll action =
     try action () with
     | effect (Push x) k ->
-       setMail ((x,0) :: (getMail ()));
+       setMail ((x,(ref Count.Inf)) :: (getMail ()));
        continue k (push x)
 end
 
@@ -254,7 +286,8 @@ let rec update_first p f = function
      then (f x) :: xs
      else x :: (update_first p f xs)
 
-let inc_snd n l = List.map (fun (y,c) -> (y,c+n)) l
+let inc_snd n l = List.map (fun (y,c) -> (y, (Count.add c n))) l
+let dec_snd n l = List.map (fun (y,c) -> (y, (Count.sub c n))) l
 
 module type JOIN = sig
   type input
@@ -296,12 +329,21 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
   let setCont c = perform (SetCont c)
 
   module Aux = struct
-    let _cart f thnk1 thnk2 thnk3 x =
+    let _cart f thnk1 thnk2 thnk3 (x,xc) =
       flatMap
-        (fun y ->
+        (fun (y,yc) ->
           flatMap
-            (fun z ->
-              List.map (fun w -> f (x,y,z,w))
+            (fun (z,zc) ->
+              flatMap
+                (fun (w,wc) ->
+                  let lives = [xc;yc;zc;wc] in
+                  if (List.for_all (fun r -> Count.lt_i 0 !r) lives)
+                  then
+                    begin
+                      List.iter (fun r -> r := Count.dec !r) lives;
+                      [f (x,y,z,w)]
+                    end
+                  else [])
                 (thnk3 ()))
             (thnk2 ()))
         (thnk1 ())
@@ -311,61 +353,18 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
     let shuffle2 (x,y,z,w) = (y,z,x,w)
     let shuffle3 (x,y,z,w) = (y,z,w,x)
 
-    (* mailbox_i, without the refcounts *)
-    let mail0 () = List.map fst (S0.getMail())
-    let mail1 () = List.map fst (S1.getMail())
-    let mail2 () = List.map fst (S2.getMail())
-    let mail3 () = List.map fst (S3.getMail())
-
-    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)
-    let refcounts0 () =
-      (List.length (S1.getMail ())) * (List.length (S2.getMail())) * (List.length (S3.getMail ()))
-    let refcounts1 () =
-      (List.length (S0.getMail ())) * (List.length (S2.getMail())) * (List.length (S3.getMail ()))
-    let refcounts2 () =
-      (List.length (S0.getMail ())) * (List.length (S1.getMail())) * (List.length (S3.getMail ()))
-    let refcounts3 () =
-      (List.length (S0.getMail ())) * (List.length (S1.getMail())) * (List.length (S2.getMail ()))
-    (* The effect of a S_i.Push x on each mailbox_k *)
-    let inc_refcounts0 x =
-      S1.setMail ((inc_snd 1) (S1.getMail()));
-      S2.setMail ((inc_snd 1) (S2.getMail()));
-      S3.setMail ((inc_snd 1) (S3.getMail()));
-      S0.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts0 ())))
-                    (S0.getMail ()))
-    let inc_refcounts1 x =
-      S0.setMail ((inc_snd 1) (S0.getMail()));
-      S2.setMail ((inc_snd 1) (S2.getMail()));
-      S3.setMail ((inc_snd 1) (S3.getMail()));
-      S1.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts1 ())))
-                    (S1.getMail ()))
-    let inc_refcounts2 x =
-      S0.setMail ((inc_snd 1) (S0.getMail()));
-      S1.setMail ((inc_snd 1) (S1.getMail()));
-      S3.setMail ((inc_snd 1) (S3.getMail()));
-      S2.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts2 ())))
-                    (S2.getMail ()))
-    let inc_refcounts3 x =
-      S0.setMail ((inc_snd 1) (S0.getMail()));
-      S1.setMail ((inc_snd 1) (S1.getMail()));
-      S2.setMail ((inc_snd 1) (S2.getMail()));
-      S3.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts3 ())))
-                    (S3.getMail ()))
+    (* GC the dead events all mailboxes. *)
+    let cleanup () =
+      Array.iter (fun (slot : (module SLOT)) ->
+          let module S = (val slot) in
+          S.setMail (List.filter (fun (_, c) -> Count.lt_i 0 !c) (S.getMail ()))) slots
 
     let eat_all (s0,s1,s2,s3) =
       let thunks = [(fun () -> Reactive.eat S0.push s0);
                     (fun () -> Reactive.eat S1.push s1);
                     (fun () -> Reactive.eat S2.push s2);
                     (fun () -> Reactive.eat S3.push s3)] in
-      List.iter (fun f -> f ()) thunks
+      List.iter (fun f -> f ()) thunks (* TODO this should be interleaved, see Async module *)
   end
   open Aux
 
@@ -375,33 +374,37 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
      slots S_k, where k =/= i. The typical use case is interpreting the
      S_i.Push effect: Compute the collection cartesian_i and pass its
      elements to the Complete effect, i.e., trigger the pattern body. *)
-  let cartesian0: S0.t -> joined list =
-    (_cart shuffle0 mail1 mail2 mail3)
-  let cartesian1: S1.t -> joined list =
-    (_cart shuffle1 mail0 mail2 mail3)
-  let cartesian2: S2.t -> joined list =
-    (_cart shuffle2 mail0 mail1 mail3)
-  let cartesian3: S3.t -> joined list =
-    (_cart shuffle3 mail0 mail1 mail2)
+  let cartesian0: (S0.t * Count.t ref) -> joined list =
+    (_cart shuffle0 S1.getMail S2.getMail S3.getMail)
+  let cartesian1: (S1.t * Count.t ref) -> joined list =
+    (_cart shuffle1 S0.getMail S2.getMail S3.getMail)
+  let cartesian2: (S2.t * Count.t ref) -> joined list =
+    (_cart shuffle2 S0.getMail S1.getMail S3.getMail)
+  let cartesian3: (S3.t * Count.t ref) -> joined list =
+    (_cart shuffle3 S0.getMail S1.getMail S2.getMail)
 
   (* The final stage in the handler stack, implementing the cartesian semantics *)
   let assemble action =
     try action () with
     | effect (S0.Push v) k ->
-       inc_refcounts0 v;
-       forkEach trigger (cartesian0 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S0.getMail ()) in
+       forkEach trigger (cartesian0 x);
+       cleanup ();
        continue k ()
     | effect (S1.Push v) k ->
-       inc_refcounts1 v;
-       forkEach trigger (cartesian1 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S1.getMail ()) in
+       forkEach trigger (cartesian1 x);
+       cleanup ();
        continue k ()
     | effect (S2.Push v) k ->
-       inc_refcounts2 v;
-       forkEach trigger (cartesian2 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S2.getMail ()) in
+       forkEach trigger (cartesian2 x);
+       cleanup ();
        continue k ()
     | effect (S3.Push v) k ->
-       inc_refcounts3 v;
-       forkEach trigger (cartesian3 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S3.getMail ()) in
+       forkEach trigger (cartesian3 x);
+       cleanup ();
        continue k ()
 
   (* Handler for the ambient mailbox state *)
@@ -451,65 +454,45 @@ module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type jo
   let slots: slots = [|(module S0);(module S1);(module S2)|]
   type input = S0.t r * S1.t r * S2.t r
   effect Join: (input * (joined -> unit)) -> unit
-  let join sp f = perform (Join (sp,f))
+  let join sp f = perform (Join (sp, f))
   effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
   effect SetCont: (joined -> unit) -> unit
   let setCont c = perform (SetCont c)
 
   module Aux = struct
-    let _cart f thnk1 thnk2 x =
+    let _cart f thnk1 thnk2 (x,xc) =
       flatMap
-        (fun y ->
-          List.map (fun z -> f (x,y,z))
+        (fun (y,yc) ->
+          flatMap
+            (fun (z,zc) ->
+                  let lives = [xc;yc;zc] in
+                  if (List.for_all (fun r -> Count.lt_i 0 !r) lives)
+                  then
+                    begin
+                      List.iter (fun r -> r := Count.dec !r) lives;
+                      [f (x,y,z)]
+                    end
+                  else [])
             (thnk2 ()))
         (thnk1 ())
-
 
     let shuffle0 p = p
     let shuffle1 (x,y,z) = (y,x,z)
     let shuffle2 (x,y,z) = (y,z,x)
+    let shuffle3 (x,y,z) = (y,z,x)
 
-    (* mailbox_i, without the refcounts *)
-    let mail0 () = List.map fst (S0.getMail())
-    let mail1 () = List.map fst (S1.getMail())
-    let mail2 () = List.map fst (S2.getMail())
-
-    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)
-    let refcounts0 () =
-      (List.length (S1.getMail ())) * (List.length (S2.getMail()))
-    let refcounts1 () =
-      (List.length (S0.getMail ())) * (List.length (S2.getMail()))
-    let refcounts2 () =
-      (List.length (S0.getMail ())) * (List.length (S1.getMail()))
-    (* The effect of a S_i.Push x on each mailbox_k *)
-    let inc_refcounts0 x =
-      S1.setMail ((inc_snd 1) (S1.getMail()));
-      S2.setMail ((inc_snd 1) (S2.getMail()));
-      S0.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts0 ())))
-                    (S0.getMail ()))
-    let inc_refcounts1 x =
-      S0.setMail ((inc_snd 1) (S0.getMail()));
-      S2.setMail ((inc_snd 1) (S2.getMail()));
-      S1.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts1 ())))
-                    (S1.getMail ()))
-    let inc_refcounts2 x =
-      S0.setMail ((inc_snd 1) (S0.getMail()));
-      S1.setMail ((inc_snd 1) (S1.getMail()));
-      S2.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts2 ())))
-                    (S2.getMail ()))
+    (* GC the dead events all mailboxes. *)
+    let cleanup () =
+      Array.iter (fun (slot : (module SLOT)) ->
+          let module S = (val slot) in
+          S.setMail (List.filter (fun (_, c) -> Count.lt_i 0 !c) (S.getMail ()))) slots
 
     let eat_all (s0,s1,s2) =
       let thunks = [(fun () -> Reactive.eat S0.push s0);
                     (fun () -> Reactive.eat S1.push s1);
                     (fun () -> Reactive.eat S2.push s2)] in
-      List.iter (fun f -> f ()) thunks
+      List.iter (fun f -> f ()) thunks (* TODO this should be interleaved, see Async module *)
   end
   open Aux
 
@@ -519,31 +502,34 @@ module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type jo
      slots S_k, where k =/= i. The typical use case is interpreting the
      S_i.Push effect: Compute the collection cartesian_i and pass its
      elements to the Complete effect, i.e., trigger the pattern body. *)
-  let cartesian0: S0.t -> joined list =
-    (_cart shuffle0 mail1 mail2)
-  let cartesian1: S1.t -> joined list =
-    (_cart shuffle1 mail0 mail2)
-  let cartesian2: S2.t -> joined list =
-    (_cart shuffle2 mail0 mail1)
+  let cartesian0: (S0.t * Count.t ref) -> joined list =
+    (_cart shuffle0 S1.getMail S2.getMail)
+  let cartesian1: (S1.t * Count.t ref) -> joined list =
+    (_cart shuffle1 S0.getMail S2.getMail)
+  let cartesian2: (S2.t * Count.t ref) -> joined list =
+    (_cart shuffle2 S0.getMail S1.getMail)
 
   (* The final stage in the handler stack, implementing the cartesian semantics *)
   let assemble action =
     try action () with
     | effect (S0.Push v) k ->
-       inc_refcounts0 v;
-       forkEach trigger (cartesian0 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S0.getMail ()) in
+       forkEach trigger (cartesian0 x);
+       cleanup ();
        continue k ()
     | effect (S1.Push v) k ->
-       inc_refcounts1 v;
-       forkEach trigger (cartesian1 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S1.getMail ()) in
+       forkEach trigger (cartesian1 x);
+       cleanup ();
        continue k ()
     | effect (S2.Push v) k ->
-       inc_refcounts2 v;
-       forkEach trigger (cartesian2 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S2.getMail ()) in
+       forkEach trigger (cartesian2 x);
+       cleanup ();
        continue k ()
 
   (* Handler for the ambient mailbox state *)
-  let ambientState action =
+  let ambientState (action: unit -> unit) =
     let action =
       with_h [S0.stateHandler;
               S1.stateHandler;
@@ -560,7 +546,7 @@ module Join3(T: sig type t0 type t1 type t2 type result end): (JOIN with type jo
   let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
     let setup () =
       try pattern () with
-      | effect (Join (streams,c)) k ->
+      | effect (Join (streams, c)) k ->
            setCont c;
            let _ = eat_all streams in (* TODO keep the promises? *)
            ()
@@ -582,52 +568,45 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
   module S0 = Slot(struct type t = T.t0 evt end)
   module S1 = Slot(struct type t = T.t1 evt end)
   type joined = S0.t * S1.t
+  type result = T.result evt
   let slots: slots = [|(module S0);(module S1)|]
   type input = S0.t r * S1.t r
-  type result = T.result evt
   effect Join: (input * (joined -> unit)) -> unit
-  let join sp f = perform (Join (sp,f))
+  let join sp f = perform (Join (sp, f))
   effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
   effect SetCont: (joined -> unit) -> unit
   let setCont c = perform (SetCont c)
 
   module Aux = struct
-    let _cart f thnk1 x =
-      List.map
-        (fun y -> f (x,y))
+    let _cart f thnk1 (x,xc) =
+      flatMap
+        (fun (y,yc) ->
+          let lives = [xc;yc] in
+          if (List.for_all (fun r -> Count.lt_i 0 !r) lives)
+          then
+            begin
+              List.iter (fun r -> r := Count.dec !r) lives;
+              [f (x,y)]
+            end
+          else [])
         (thnk1 ())
 
     let shuffle0 p = p
     let shuffle1 (x,y) = (y,x)
+    let shuffle2 (x,y) = (y,x)
+    let shuffle3 (x,y) = (y,x)
 
-    (* mailbox_i, without the refcounts *)
-    let mail0 () = List.map fst (S0.getMail())
-    let mail1 () = List.map fst (S1.getMail())
+    (* GC the dead events all mailboxes. *)
+    let cleanup () =
+      Array.iter (fun (slot : (module SLOT)) ->
+          let module S = (val slot) in
+          S.setMail (List.filter (fun (_, c) -> Count.lt_i 0 !c) (S.getMail ()))) slots
 
-    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)
-    let refcounts0 () =
-      (List.length (S1.getMail ()))
-    let refcounts1 () =
-      (List.length (S0.getMail ()))
-    (* The effect of a S_i.Push x on each mailbox_k *)
-    let inc_refcounts0 x =
-      S1.setMail ((inc_snd 1) (S1.getMail()));
-      S0.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts0 ())))
-                    (S0.getMail ()))
-    let inc_refcounts1 x =
-      S0.setMail ((inc_snd 1) (S0.getMail()));
-      S1.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts1 ())))
-                    (S1.getMail ()))
     let eat_all (s0,s1) =
       let thunks = [(fun () -> Reactive.eat S0.push s0);
                     (fun () -> Reactive.eat S1.push s1)] in
-      (* let res = Async.interleaved thunks in *) (*TODO make interleaved *)
-      List.iter (fun f -> f ()) thunks;
+      List.iter (fun f -> f ()) thunks (* TODO this should be interleaved, see Async module *)
   end
   open Aux
 
@@ -637,29 +616,31 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
      slots S_k, where k =/= i. The typical use case is interpreting the
      S_i.Push effect: Compute the collection cartesian_i and pass its
      elements to the Complete effect, i.e., trigger the pattern body. *)
-  let cartesian0: S0.t -> joined list =
-    (_cart shuffle0 mail1)
-  let cartesian1: S1.t -> joined list =
-    (_cart shuffle1 mail0)
+  let cartesian0: (S0.t * Count.t ref) -> joined list =
+    (_cart shuffle0 S1.getMail)
+  let cartesian1: (S1.t * Count.t ref) -> joined list =
+    (_cart shuffle1 S0.getMail)
 
   (* The final stage in the handler stack, implementing the cartesian semantics *)
   let assemble action =
     try action () with
     | effect (S0.Push v) k ->
-       inc_refcounts0 v;
-       forkEach trigger (cartesian0 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S0.getMail ()) in
+       forkEach trigger (cartesian0 x);
+       cleanup ();
        continue k ()
     | effect (S1.Push v) k ->
-       inc_refcounts1 v;
-       forkEach trigger (cartesian1 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S1.getMail ()) in
+       forkEach trigger (cartesian1 x);
+       cleanup ();
        continue k ()
 
   (* Handler for the ambient mailbox state *)
-  let ambientState action =
+  let ambientState (action: unit -> unit) =
     let action =
       with_h [S0.stateHandler;
               S1.stateHandler] action in
-    let cont: (joined -> unit) option ref = ref None in (*TODO avoid mutability*)
+    let cont: (joined -> unit) option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
     | effect (Trigger res) k ->
@@ -671,8 +652,8 @@ module Join2(T: sig type t0 type t1 type result end): (JOIN with type joined = T
   let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
     let setup () =
       try pattern () with
-      | effect (Join (streams, callback)) k ->
-           setCont callback;
+      | effect (Join (streams, c)) k ->
+           setCont c;
            let _ = eat_all streams in (* TODO keep the promises? *)
            ()
     in
@@ -691,44 +672,67 @@ module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0 evt
   = struct
   module S0 = Slot(struct type t = T.t0 evt end)
   type joined = S0.t
+  type result = T.result evt
   let slots: slots = [|(module S0)|]
   type input = S0.t r
-  type result = T.result evt
   effect Join: (input * (joined -> unit)) -> unit
-  let join sp f = perform (Join (sp,f))
+  let join sp f = perform (Join (sp, f))
   effect Trigger: joined -> unit
   let trigger v = perform (Trigger v)
   effect SetCont: (joined -> unit) -> unit
   let setCont c = perform (SetCont c)
 
   module Aux = struct
-    (* For a S_i.Push v effect, computes the refcount of v, which is the product over |mailbox_k|, k =/= i*)
-    let refcounts0 () = 1
-    (* The effect of a S_i.Push x on each mailbox_k *)
-    let inc_refcounts0 x =
-      S0.setMail (update_first
-                    (fun (y,_) -> y = x)
-                    (fun (x,c) -> (x,c+(refcounts0 ())))
-                    (S0.getMail ()))
+    let _cart f (x,xc) =
+      let lives = [xc] in
+      if (List.for_all (fun r -> Count.lt_i 0 !r) lives)
+      then
+        begin
+          List.iter (fun r -> r := Count.dec !r) lives;
+          [f x]
+        end
+      else []
+
+
+    let shuffle0 p = p
+    let shuffle1 (x,y) = (y,x)
+    let shuffle2 (x,y) = (y,x)
+    let shuffle3 (x,y) = (y,x)
+
+    (* GC the dead events all mailboxes. *)
+    let cleanup () =
+      Array.iter (fun (slot : (module SLOT)) ->
+          let module S = (val slot) in
+          S.setMail (List.filter (fun (_, c) -> Count.lt_i 0 !c) (S.getMail ()))) slots
+
     let eat_all s0 =
       let thunks = [(fun () -> Reactive.eat S0.push s0)] in
-      List.iter (fun f -> f ()) thunks
+      List.iter (fun f -> f ()) thunks (* TODO this should be interleaved, see Async module *)
   end
   open Aux
 
-  let cartesian0: S0.t -> joined list = (fun x -> [x])
+  (* We stage for each slot S_i a function cartesian_i,
+     which takes an event notification x of type S_i.t and computes
+     the cross-product of x and the contents of the mailboxes for the remaining
+     slots S_k, where k =/= i. The typical use case is interpreting the
+     S_i.Push effect: Compute the collection cartesian_i and pass its
+     elements to the Complete effect, i.e., trigger the pattern body. *)
+  let cartesian0: (S0.t * Count.t ref) -> joined list =
+    (_cart shuffle0)
 
   (* The final stage in the handler stack, implementing the cartesian semantics *)
   let assemble action =
     try action () with
     | effect (S0.Push v) k ->
-       inc_refcounts0 v;
-       forkEach trigger (cartesian0 v);
+       let x = List.find (fun (ev,_) -> ev = v) (S0.getMail ()) in
+       forkEach trigger (cartesian0 x);
+       cleanup ();
        continue k ()
 
   (* Handler for the ambient mailbox state *)
-  let ambientState action =
-    let action = (fun () -> S0.stateHandler action) in
+  let ambientState (action: unit -> unit) =
+    let action =
+      with_h [S0.stateHandler] action in
     let cont: (joined -> unit) option ref = ref None in
     try action () with
     | effect (SetCont c) k -> cont := Some c; continue k ()
@@ -741,10 +745,10 @@ module Join1(T: sig type t0 type result end): (JOIN with type joined = T.t0 evt
   let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
     let setup () =
       try pattern () with
-      | effect (Join (streams, f)) k ->
-         setCont f;
-         let _ = eat_all streams in (* TODO keep the promises? *)
-         ()
+      | effect (Join (streams, c)) k ->
+           setCont c;
+           let _ = eat_all streams in (* TODO keep the promises? *)
+           ()
     in
     with_h [ambientState;
             assemble;
@@ -756,31 +760,26 @@ end
 
 let mostRecent (join: (module JOIN)) i action =
   let module J = (val join) in
-  let module S = (val (Array.get J.slots i)) in
+  let module Si = (val (Array.get J.slots i)) in
   try action () with
-  | effect (S.Push v) k ->
-     S.setMail([(v,0)]);
-     continue k (S.push v)
+  | effect (Si.Push v) k ->
+     (* mostRecent means to forget the past *)
+     Si.setMail([(v,ref (Count.Inf))]);
+     continue k (Si.push v)
 
-(** Restrict the ith slot of a join such that each event for i is associated at most once in a product *)
-let affine (join: (module JOIN)) i action =
+(** Restrict the ith slot of a join such that each event for i is associated at most n times in a product *)
+let affine n (join: (module JOIN)) i action =
   let module J = (val join) in
   let module Si = (val (Array.get J.slots i)) in
-  let filter_i () = Si.setMail (List.filter (fun (_,c) -> c = 0) (Si.getMail ())) in
-  (* We intercept any push effect that a join may process (= potential change of S_i inbox)
-     and simply clear out values from S_i's inbox *)
-  let wrap (slot: (module SLOT)) thunk =
-    begin
-      let module S = (val slot) in
-      let thunk () =
-        try thunk () with
-        | effect (S.Push v) k ->
-           S.push v;     (* First let upstream apply the effect. *)
-           filter_i ();  (* Check what needs to be GC'd. *)
-           continue k () (* Signal downstream to continue *)
-      in thunk
-    end
-  in (Array.fold_right wrap J.slots action) ()
+  try action () with
+  | effect (Si.Push v) k ->
+     Si.setMail(update_first
+                  (fun (x,_) -> x = v)
+                  (fun (x,c) ->
+                    c := (Count.Fin n);
+                    (x,c))
+                  (Si.getMail ()));
+       continue k (Si.push v)
 
 module Test = struct
   let testStreams = begin
@@ -939,7 +938,9 @@ module Test = struct
 
   let testCartesian4 () = test4 cartesian4 ()
 
-  let affine3_1 (type a) (type b) (type c)
+  let affine3 (type a) (type b) (type c)
+        (n: int)
+        (i: int)
         (show: (a * b * c) evt -> string)
         (s1: a evt r)
         (s2: b evt r)
@@ -957,12 +958,12 @@ module Test = struct
       (fun () ->
         S.handler
           (J.correlate
-             ~restriction: (affine (module J) 1)
+             ~restriction: (affine n (module J) i)
              (fun () ->
                J.join (s1,s2,s3) (function
                    | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
                       S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
-  let testAffine3_1 () = test3 affine3_1 ()
+  let testAffine3_1_1 () = test3 (affine3 1 1) ()
 
 end
