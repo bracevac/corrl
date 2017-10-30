@@ -781,6 +781,109 @@ let affine n (join: (module JOIN)) i action =
                   (Si.getMail ()));
        continue k (Si.push v)
 
+(* TODO: there is a nicer way to implement align, but it requires the interleaved combinator. *)
+(* let align (join: (module JOIN)) indices action =
+ *   let module J = (val join) in
+ *   let slots = Array.map (fun i -> Array.get J.slots i) in
+ *
+ *   let wrap (slot: (module SLOT)) thunk =
+ *
+ *   in
+ *   in (Array.fold_right wrap action slots) () *)
+
+let align2 (join: (module JOIN)) action =
+  let module J = (val join) in
+  let _ = assert ((Array.length J.slots) = 2) in
+  let module S0 = (val (Array.get J.slots 0)) in
+  let module S1 = (val (Array.get J.slots 1)) in
+  let tryFire () = begin
+    let m0 = S0.getMail () in
+    let m1 = S1.getMail () in
+    match (m0, m1) with
+    | ([],_) | (_,[]) -> ()
+    | _ ->
+       let ((ev0,_)::r0) = List.rev m0 in
+       let ((ev1,_)::r1) = List.rev m1 in
+       let res: J.joined = Obj.magic (ev0,ev1) in (* ugly! *)
+       S0.setMail (List.rev r0);
+       S1.setMail (List.rev r1);
+       forkEach J.trigger [res]
+    end
+  in
+  try action () with
+  | effect (S0.Push _) k ->
+     continue k (tryFire ())
+  | effect (S1.Push _) k ->
+     continue k (tryFire ())
+
+let align3 (join: (module JOIN)) action =
+  let module J = (val join) in
+  let _ = assert ((Array.length J.slots) = 3) in
+  let module S0 = (val (Array.get J.slots 0)) in
+  let module S1 = (val (Array.get J.slots 1)) in
+  let module S2 = (val (Array.get J.slots 2)) in
+  let tryFire () = begin
+    let m0 = S0.getMail () in
+    let m1 = S1.getMail () in
+    let m2 = S2.getMail () in
+    match (m0, m1,m2) with
+    | ([],_,_) | (_,[],_) | (_,_,[]) -> ()
+    | _ ->
+       let ((ev0,_)::r0) = List.rev m0 in
+       let ((ev1,_)::r1) = List.rev m1 in
+       let ((ev2,_)::r2) = List.rev m2 in
+       let res: J.joined = Obj.magic (ev0,ev1,ev2) in (* ugly! *)
+       S0.setMail (List.rev r0);
+       S1.setMail (List.rev r1);
+       S2.setMail (List.rev r2);
+       forkEach J.trigger [res]
+    end
+  in
+  try action () with
+  | effect (S0.Push _) k ->
+     continue k (tryFire ())
+  | effect (S1.Push _) k ->
+     continue k (tryFire ())
+  | effect (S2.Push _) k ->
+     continue k (tryFire ())
+
+let align4 (join: (module JOIN)) action =
+  let module J = (val join) in
+  let _ = assert ((Array.length J.slots) = 4) in
+  let module S0 = (val (Array.get J.slots 0)) in
+  let module S1 = (val (Array.get J.slots 1)) in
+  let module S2 = (val (Array.get J.slots 2)) in
+  let module S3 = (val (Array.get J.slots 3)) in
+  let tryFire () = begin
+    let m0 = S0.getMail () in
+    let m1 = S1.getMail () in
+    let m2 = S2.getMail () in
+    let m3 = S3.getMail () in
+    match (m0,m1,m2,m3) with
+    | ([],_,_,_) | (_,[],_,_) | (_,_,[],_) | (_,_,_,[]) -> ()
+    | _ ->
+       let ((ev0,_)::r0) = List.rev m0 in
+       let ((ev1,_)::r1) = List.rev m1 in
+       let ((ev2,_)::r2) = List.rev m2 in
+       let ((ev3,_)::r3) = List.rev m3 in
+       let res: J.joined = Obj.magic (ev0,ev1,ev2,ev3) in (* ugly! *)
+       S0.setMail (List.rev r0);
+       S1.setMail (List.rev r1);
+       S2.setMail (List.rev r2);
+       S3.setMail (List.rev r3);
+       forkEach J.trigger [res]
+    end
+  in
+  try action () with
+  | effect (S0.Push _) k ->
+     continue k (tryFire ())
+  | effect (S1.Push _) k ->
+     continue k (tryFire ())
+  | effect (S2.Push _) k ->
+     continue k (tryFire ())
+  | effect (S3.Push _) k ->
+     continue k (tryFire ())
+
 module Test = struct
   let testStreams = begin
       let e1 = Ev (0, (1,1)) in
@@ -965,5 +1068,32 @@ module Test = struct
                       S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
   let testAffine3_1_1 () = test3 (affine3 1 1) ()
+
+  let aligned3 (type a) (type b) (type c)
+        (show: (a * b * c) evt -> string)
+        (s1: a evt r)
+        (s2: b evt r)
+        (s3: c evt r) () =
+    let module T = struct type t0 = a
+                          type t1 = b
+                          type t2 = c
+                          type result = a * b * c
+                   end
+    in
+    let module J = Join3(T) in
+    let module S = SingleWorld(struct type t = J.result end) in
+    context
+      show
+      (fun () ->
+        S.handler
+          (J.correlate
+             ~restriction: (align3 (module J))
+             (fun () ->
+               J.join (s1,s2,s3) (function
+                   | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
+                      S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
+
+
+  let testAlign3 () = test3 aligned3 ()
 
 end
