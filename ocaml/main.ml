@@ -194,6 +194,7 @@ let context (type a) (show: a -> string) action =
   in
   ManyWorlds.handler onDone action
 
+(** Models a type for lifetime counters, which is either a finite int value or infinity. *)
 module Count = struct
   (* TODO prohibit negative values *)
   type t = Inf | Fin of int
@@ -782,14 +783,6 @@ let affine n (join: (module JOIN)) i action =
        continue k (Si.push v)
 
 (* TODO: there is a nicer way to implement align, but it requires the interleaved combinator. *)
-(* let align (join: (module JOIN)) indices action =
- *   let module J = (val join) in
- *   let slots = Array.map (fun i -> Array.get J.slots i) in
- *
- *   let wrap (slot: (module SLOT)) thunk =
- *
- *   in
- *   in (Array.fold_right wrap action slots) () *)
 
 let align2 (join: (module JOIN)) action =
   let module J = (val join) in
@@ -797,17 +790,15 @@ let align2 (join: (module JOIN)) action =
   let module S0 = (val (Array.get J.slots 0)) in
   let module S1 = (val (Array.get J.slots 1)) in
   let tryFire () = begin
-    let m0 = S0.getMail () in
-    let m1 = S1.getMail () in
-    match (m0, m1) with
-    | ([],_) | (_,[]) -> ()
-    | _ ->
-       let ((ev0,_)::r0) = List.rev m0 in
-       let ((ev1,_)::r1) = List.rev m1 in
+    let m0 = List.rev (S0.getMail ()) in
+    let m1 = List.rev (S1.getMail ()) in
+    match (m0,m1) with
+    | ((ev0,_)::r0, (ev1,_)::r1) ->
        let res: J.joined = Obj.magic (ev0,ev1) in (* ugly! *)
        S0.setMail (List.rev r0);
        S1.setMail (List.rev r1);
        forkEach J.trigger [res]
+    | _ -> ()
     end
   in
   try action () with
@@ -823,20 +814,17 @@ let align3 (join: (module JOIN)) action =
   let module S1 = (val (Array.get J.slots 1)) in
   let module S2 = (val (Array.get J.slots 2)) in
   let tryFire () = begin
-    let m0 = S0.getMail () in
-    let m1 = S1.getMail () in
-    let m2 = S2.getMail () in
-    match (m0, m1,m2) with
-    | ([],_,_) | (_,[],_) | (_,_,[]) -> ()
-    | _ ->
-       let ((ev0,_)::r0) = List.rev m0 in
-       let ((ev1,_)::r1) = List.rev m1 in
-       let ((ev2,_)::r2) = List.rev m2 in
+    let m0 = List.rev (S0.getMail ()) in
+    let m1 = List.rev (S1.getMail ()) in
+    let m2 = List.rev (S2.getMail ()) in
+    match (m0,m1,m2) with
+    | ((ev0,_)::r0, (ev1,_)::r1, (ev2,_)::r2) ->
        let res: J.joined = Obj.magic (ev0,ev1,ev2) in (* ugly! *)
        S0.setMail (List.rev r0);
        S1.setMail (List.rev r1);
        S2.setMail (List.rev r2);
        forkEach J.trigger [res]
+    | _ -> ()
     end
   in
   try action () with
@@ -855,23 +843,19 @@ let align4 (join: (module JOIN)) action =
   let module S2 = (val (Array.get J.slots 2)) in
   let module S3 = (val (Array.get J.slots 3)) in
   let tryFire () = begin
-    let m0 = S0.getMail () in
-    let m1 = S1.getMail () in
-    let m2 = S2.getMail () in
-    let m3 = S3.getMail () in
+    let m0 = List.rev (S0.getMail ()) in
+    let m1 = List.rev (S1.getMail ()) in
+    let m2 = List.rev (S2.getMail ()) in
+    let m3 = List.rev (S3.getMail ()) in
     match (m0,m1,m2,m3) with
-    | ([],_,_,_) | (_,[],_,_) | (_,_,[],_) | (_,_,_,[]) -> ()
-    | _ ->
-       let ((ev0,_)::r0) = List.rev m0 in
-       let ((ev1,_)::r1) = List.rev m1 in
-       let ((ev2,_)::r2) = List.rev m2 in
-       let ((ev3,_)::r3) = List.rev m3 in
+    | ((ev0,_)::r0, (ev1,_)::r1, (ev2,_)::r2, (ev3,_)::r3) ->
        let res: J.joined = Obj.magic (ev0,ev1,ev2,ev3) in (* ugly! *)
        S0.setMail (List.rev r0);
        S1.setMail (List.rev r1);
        S2.setMail (List.rev r2);
        S3.setMail (List.rev r3);
        forkEach J.trigger [res]
+    | _ -> ()
     end
   in
   try action () with
