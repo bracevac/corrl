@@ -124,6 +124,9 @@ module Reactive = struct
     | x::xs -> RCons (x, (Async.liftPromise (_toR xs)))
     in Async.liftPromise (_toR l)
 
+  let liftArray: 'a array -> 'a r = fun a ->
+    Async.liftPromise (Array.fold_right (fun x -> fun r -> RCons (x, (Async.liftPromise r))) a RNil)
+
   let rec eat f stream =
     match Async.await stream with
     | RCons (hd, tl) -> (f hd); eat f tl
@@ -1079,5 +1082,279 @@ module Test = struct
 
 
   let testAlign3 () = test3 aligned3 ()
+
+end
+
+module Bench = struct
+
+    (* Stream size *)
+  (* let count = 100000000 *)
+  let count = 100000 (* For testing purposes *)
+  let bound = 1073741823 (* 2^30 - 1, max bound that Random.int accepts *)
+
+  let now = Unix.gettimeofday
+
+  type stat =
+    { mutable n_tested: int;     (* measure by pattern cont.  *)
+      mutable n_output: int;     (* that too, or by context  *)
+      mutable t_react: float;    (* override singleworld *)
+      mutable t_latency: float;  (* override context *)
+      mutable throughput: float; (* derivable by count/duration in the end *)
+      mutable memory: float;
+      mutable duration: float }
+
+  let to_csv_row stat =
+    Printf.sprintf "\"%d\",\"%d\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\""
+      stat.n_tested
+      stat.n_output
+      stat.t_react
+      stat.t_latency
+      stat.throughput
+      stat.memory
+      stat.duration
+
+  let freshStat () =
+    { n_tested = 0;
+      n_output = 0;
+      t_react = 0.0;
+      t_latency = 0.0;
+      throughput = 0.0;
+      memory = 0.0;
+      duration = 0.0 }
+
+  effect Inject: stat
+  let inject () = perform Inject
+
+  (* Signals end of a measurement *)
+  effect Terminate: 'a
+  let terminate () = perform Terminate
+
+  module Join3Bench(T: sig type t0 type t1 type t2 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt * T.t2 evt
+                                                                     and type input = T.t0 evt r * T.t1 evt r * T.t2 evt r
+                                                                     and type result = T.result evt)
+    = struct
+    module S0 = Slot(struct type t = T.t0 evt end)
+    module S1 = Slot(struct type t = T.t1 evt end)
+    module S2 = Slot(struct type t = T.t2 evt end)
+    type joined = S0.t * S1.t * S2.t
+    type result = T.result evt
+    let slots: slots = [|(module S0);(module S1);(module S2)|]
+    type input = S0.t r * S1.t r * S2.t r
+                                     effect Join: (input * (joined -> unit)) -> unit
+    let join sp f = perform (Join (sp, f))
+                      effect Trigger: joined -> unit
+    let trigger v = perform (Trigger v)
+                      effect SetCont: (joined -> unit) -> unit
+    let setCont c = perform (SetCont c)
+
+    module Aux = struct
+      let _cart f thnk1 thnk2 (x,xc) =
+        flatMap
+          (fun (y,yc) ->
+            flatMap
+              (fun (z,zc) ->
+                let lives = [xc;yc;zc] in
+                if (List.for_all (fun r -> Count.lt_i 0 !r) lives)
+                then
+                  begin
+                    List.iter (fun r -> r := Count.dec !r) lives;
+                    [f (x,y,z)]
+                  end
+                else [])
+              (thnk2 ()))
+          (thnk1 ())
+
+      let shuffle0 p = p
+      let shuffle1 (x,y,z) = (y,x,z)
+      let shuffle2 (x,y,z) = (y,z,x)
+      let shuffle3 (x,y,z) = (y,z,x)
+
+      (* GC the dead events all mailboxes. *)
+      let cleanup () =
+        Array.iter (fun (slot : (module SLOT)) ->
+            let module S = (val slot) in
+            S.setMail (List.filter (fun (_, c) -> Count.lt_i 0 !c) (S.getMail ()))) slots
+
+      let eat_all (s0,s1,s2) =
+        let stat = inject () in
+        let (s0,s1,s2) = (ref (Some s0), ref (Some s1), ref (Some s2)) in
+        let rec select tries i = begin
+            let next = (i + 1) mod 3 in
+            match (tries,i) with
+            |(0,_) -> terminate () (* all done, quit *)
+            |(_,0) ->
+              begin match !s0 with
+              | None -> select (tries - 1) next
+              | Some r -> match Async.await r with
+                          | RCons (hd, tl) ->
+                             begin
+                               s0 := Some tl;
+                               S0.push hd; (* TODO measure here *)
+                               select 3 1
+                             end
+                          | RNil -> s0 := None; select (tries - 1) (next)
+              end
+            |(_,1) ->
+              begin match !s1 with
+              | None -> select (tries - 1) next
+              | Some r ->  match Async.await r with
+                           | RCons (hd, tl) ->
+                              begin
+                                s1 := Some tl;
+                                S1.push hd; (* TODO measure here *)
+                                select 3 2
+                              end
+                           | RNil -> s1 := None; select (tries - 1) (next)
+              end
+            |(_,2) ->
+              begin match !s2 with
+              | None -> select (tries - 1) next
+              | Some r ->  match Async.await r with
+                           | RCons (hd, tl) ->
+                              begin
+                                s2 := Some tl;
+                                S2.push hd; (* TODO measure here *)
+                                select 3 0
+                              end
+                           | RNil -> s2 := None; select (tries - 1) (next)
+              end
+          end
+        in select 3 0
+    end
+    open Aux
+
+    (* We stage for each slot S_i a function cartesian_i,
+     whic h takes an event notification x of type S_i.t and computes
+     the c  ross-product of x and the contents of the mailboxes for the remaining
+     slots S             _k, where k =/= i. The typical use case is interpreting the
+     S_i.Push effect: Com    pute the collection cartesian_i and pass its
+     elements to the Complete      effect, i.e., trigger the pattern body. *)
+    let cartesian0: (S0.t * Count.t ref) -> joined list =
+      (_cart shuffle0 S1.getMail S2.getMail)
+    let cartesian1: (S1.t * Count.t ref) -> joined list =
+      (_cart shuffle1 S0.getMail S2.getMail)
+    let cartesian2: (S2.t * Count.t ref) -> joined list =
+      (_cart shuffle2 S0.getMail S1.getMail)
+
+  (* The final stage in the handler stack, implementing the cartesian semantics *)
+    let assemble action =
+      try action () with
+      | effect (S0.Push v) k ->
+         let x = List.find (fun (ev,_) -> ev = v) (S0.getMail ()) in
+         forkEach trigger (cartesian0 x);
+         cleanup ();
+         continue k ()
+      | effect (S1.Push v) k ->
+         let x = List.find (fun (ev,_) -> ev = v) (S1.getMail ()) in
+         forkEach trigger (cartesian1 x);
+         cleanup ();
+         continue k ()
+      | effect (S2.Push v) k ->
+         let x = List.find (fun (ev,_) -> ev = v) (S2.getMail ()) in
+         forkEach trigger (cartesian2 x);
+         cleanup ();
+         continue k ()
+
+    (* Handler for the ambient mailbox state *)
+    let ambientState (action: unit -> unit) =
+      let action =
+        with_h [S0.stateHandler;
+                S1.stateHandler;
+                S2.stateHandler] action in
+      let cont: (joined -> unit) option ref = ref None in
+      try action () with
+      | effect (SetCont c) k -> cont := Some c; continue k ()
+      | effect (Trigger res) k ->
+         match !cont with
+         | Some c ->
+            c res
+         | None -> failwith "uninitialized join continuation"
+
+    let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
+      let setup () =
+        try pattern () with
+        | effect (Join (streams, c)) k ->
+           setCont c;
+           let _ = eat_all streams in (* TODO keep the promises? *)
+           ()
+      in
+      with_h [ambientState;
+              assemble;
+              restriction;
+              S0.forAll;
+              S1.forAll;
+              S2.forAll;
+              window]
+        setup ()
+  end
+
+  let randStream n =
+    let res = ref (Async.liftPromise RNil) in
+    let rec loop i =
+      if (i > 0) then begin
+          res := (Async.liftPromise (RCons (Ev (Random.int bound, (i,i)), !res)));
+          loop (i - 1)
+        end
+      else ()
+    in begin
+        loop n;
+        !res
+      end
+
+  let measure f =
+    let a1 = randStream count in
+    let a2 = randStream count in
+    let a3 = randStream count in
+    let stat = freshStat () in
+    let start = now () in
+    begin try (f a1 a2 a3 stat) with
+    | effect Terminate _ -> ()
+    | effect Inject k -> continue k stat
+    | _ -> ()
+    end;
+    stat.duration <- now () -. start;
+    stat
+
+  let context stat action =
+    let onDone _ = stat.n_output <- stat.n_output + 1
+    in
+    ManyWorlds.handler onDone action
+
+  (*TODO write a manual interleaving*)
+
+  module SingleWorldBench(T: SomeT) = struct
+    include SingleWorld(T)
+
+                       (* measure reaction time here *)
+  end
+
+  let cartesian3 s1 s2 s3 stat =
+    let module T = struct type t0 = int
+                          type t1 = int
+                          type t2 = int
+                          type result = int * int * int
+                   end
+    in
+    let module J = Join3Bench(T) in
+    let module S = SingleWorldBench(struct type t = J.result end) in
+    context
+      stat
+      (fun () ->
+        S.handler
+          (J.correlate (fun () ->
+               J.join (s1,s2,s3) (function
+                   | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
+                      S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
+
+
+
+
+  (*
+    Join by id
+    Join by timing
+    Zip
+    CombineLatest
+    Affine
+*)
 
 end
