@@ -121,3 +121,41 @@ fun testStreams() {
   (s1,s2)
 }
 
+effect push3<a,b,c> {
+  push1(v: a): ();
+  push2(v: b): ();
+  push3(v: c): ()
+}
+
+type count {
+  Fin(n: int)
+  Inf
+}
+
+alias mailbox<a> = list<(a,ref<global,count>)>
+
+effect mailboxes3<a,b,c> {
+  getmail1(): mailbox<a>;
+  getmail2(): mailbox<b>;
+  getmail3(): mailbox<c>;
+  setmail1(v: mailbox<a>): ();
+  setmail2(v: mailbox<b>): ();
+  setmail3(v: mailbox<c>): ();
+}
+
+val forAll = handler {
+  return x -> x
+
+  push1(x) -> {
+    setmail1(Cons((x,ref(Inf)), getmail1()))
+    resume(push1(x))
+  }
+  push2(x) -> {
+    setmail2(Cons((x,ref(Inf)), getmail2()))
+    resume(push2(x))
+  }
+  push3(x) -> {
+    setmail3(Cons((x,ref(Inf)), getmail3()))
+    resume(push3(x))
+  }
+}
