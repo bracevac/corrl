@@ -204,3 +204,26 @@ val mostRecent3 = handler {
     resume(push3(x))
   }
 }
+
+
+fun update<a>(m: mailbox<a>, x: a, c: count): (write<global>) mailbox<a> { match(m) {
+  Nil -> Nil
+  Cons((v,r), tl) -> {
+    if (refEq(x,v)) then (r := c)
+    Cons((v,r),update(tl, x, c))
+}}}
+
+val affine1 = handler {
+  return x -> x
+
+  push1(x) -> {
+    setmail1(update(getmail1(), x, Fin(1)))
+    resume(push1(x))
+  }
+  push2(x) -> {
+    resume(push2(x))
+  }
+  push3(x) -> {
+    resume(push3(x))
+  }
+}

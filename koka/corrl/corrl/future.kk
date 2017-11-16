@@ -12,12 +12,12 @@ fun fr<a>(thunk: () -> <async,exn,ndet|e> a): <async,exn,ndet|e> fr<a> {
 }
 
 //We require equality on futures in order to bind a given handler to a specific stream
-extern inline (==): forall<a,b> (x: fr<a>, y: fr<b>) -> bool {
+extern inline (===): forall<a,b> (x: a, y: b) -> bool {
   js inline "#1 === #2"
 }
 
-fun refEq<a,b>(x: fr<a>, y: fr<b>): bool {
-  x == y
+fun refEq<a,b>(x: a, y: b): bool {
+  x === y
 }
 
 fun futureEq<a>(action: () -> <equality<fr<a>>|e> a): <|e> a {
