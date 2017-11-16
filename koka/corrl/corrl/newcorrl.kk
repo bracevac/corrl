@@ -227,3 +227,33 @@ val affine1 = handler {
     resume(push3(x))
   }
 }
+
+val affine2 = handler {
+  return x -> x
+
+  push1(x) -> {
+    resume(push1(x))
+  }
+  push2(x) -> {
+    setmail2(update(getmail2(), x, Fin(1)))
+    resume(push2(x))
+  }
+  push3(x) -> {
+    resume(push3(x))
+  }
+}
+
+val affine3 = handler {
+  return x -> x
+
+  push1(x) -> {
+    resume(push1(x))
+  }
+  push2(x) -> {
+    resume(push2(x))
+  }
+  push3(x) -> {
+    setmail3(update(getmail3(), x, Fin(1)))
+    resume(push3(x))
+  }
+}
