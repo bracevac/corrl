@@ -159,3 +159,20 @@ val forAll = handler {
     resume(push3(x))
   }
 }
+
+val mostRecent = handler {
+  return x -> x
+
+  push1(x) -> {
+    setmail1([(x,ref(Inf))])
+    resume(push1(x))
+  }
+  push2(x) -> {
+    setmail2([(x,ref(Inf))])
+    resume(push2(x))
+  }
+  push3(x) -> {
+    setmail3([(x,ref(Inf))])
+    resume(push3(x))
+  }
+}
