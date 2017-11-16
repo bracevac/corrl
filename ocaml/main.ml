@@ -1090,6 +1090,7 @@ module Bench = struct
     (* Stream size *)
   (* let count = 100000000 *)
   let count = 100000 (* For testing purposes *)
+  let samplePeriod = count/1000 (* How often to sample *)
   let bound = 1073741823 (* 2^30 - 1, max bound that Random.int accepts *)
 
   let now = Unix.gettimeofday
@@ -1097,18 +1098,18 @@ module Bench = struct
   type stat =
     { mutable n_tested: int;     (* measure by pattern cont.  *)
       mutable n_output: int;     (* that too, or by context  *)
-      mutable t_react: float;    (* override singleworld *)
-      mutable t_latency: float;  (* override context *)
+      (* mutable t_react: float;    (\* override singleworld *\)
+       * mutable t_latency: float;  (\* override context *\) *)
       mutable throughput: float; (* derivable by count/duration in the end *)
-      mutable memory: float;
-      mutable duration: float }
+      mutable memory: float;     (* measure in eat *)
+      mutable duration: float }  (* measure at start/end *)
 
   let to_csv_row stat =
-    Printf.sprintf "\"%d\",\"%d\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\""
+    Printf.sprintf "\"%d\",\"%d\",\"%f\",\"%f\",\"%f\""
       stat.n_tested
       stat.n_output
-      stat.t_react
-      stat.t_latency
+      (* stat.t_react
+       * stat.t_latency *)
       stat.throughput
       stat.memory
       stat.duration
@@ -1116,8 +1117,8 @@ module Bench = struct
   let freshStat () =
     { n_tested = 0;
       n_output = 0;
-      t_react = 0.0;
-      t_latency = 0.0;
+      (* t_react = 0.0;
+       * t_latency = 0.0; *)
       throughput = 0.0;
       memory = 0.0;
       duration = 0.0 }
@@ -1175,13 +1176,25 @@ module Bench = struct
             let module S = (val slot) in
             S.setMail (List.filter (fun (_, c) -> Count.lt_i 0 !c) (S.getMail ()))) slots
 
+      let lengths () = (List.length (S0.getMail ())) + (List.length (S1.getMail ())) + (List.length (S2.getMail ()))
+
       let eat_all (s0,s1,s2) =
+        let num = ref 0 in
         let stat = inject () in
+        let refreshStat () =
+          begin
+            match (!num mod samplePeriod) with
+            | 0 -> stat.memory <- stat.memory +. (float_of_int (lengths ()))
+            | _ -> ()
+          end
+        in
         let (s0,s1,s2) = (ref (Some s0), ref (Some s1), ref (Some s2)) in
         let rec select tries i = begin
             let next = (i + 1) mod 3 in
             match (tries,i) with
-            |(0,_) -> terminate () (* all done, quit *)
+            |(0,_) ->
+              stat.memory <- stat.memory /. (float_of_int (count / samplePeriod));
+              terminate () (* all done, quit *)
             |(_,0) ->
               begin match !s0 with
               | None -> select (tries - 1) next
@@ -1190,6 +1203,8 @@ module Bench = struct
                              begin
                                s0 := Some tl;
                                S0.push hd; (* TODO measure here *)
+                               num := !num + 1;
+                               refreshStat ();
                                select 3 1
                              end
                           | RNil -> s0 := None; select (tries - 1) (next)
@@ -1202,6 +1217,8 @@ module Bench = struct
                               begin
                                 s1 := Some tl;
                                 S1.push hd; (* TODO measure here *)
+                                num := !num + 1;
+                                refreshStat ();
                                 select 3 2
                               end
                            | RNil -> s1 := None; select (tries - 1) (next)
@@ -1214,6 +1231,8 @@ module Bench = struct
                               begin
                                 s2 := Some tl;
                                 S2.push hd; (* TODO measure here *)
+                                num := !num + 1;
+                                refreshStat ();
                                 select 3 0
                               end
                            | RNil -> s2 := None; select (tries - 1) (next)
