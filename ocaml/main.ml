@@ -1096,13 +1096,13 @@ module Bench = struct
   let now = Unix.gettimeofday
 
   type stat =
-    { mutable n_tested: int;     (* measure by pattern cont.  *)
-      mutable n_output: int;     (* that too, or by context  *)
+    {  n_tested: int;     (* measure by pattern cont.  *)
+       n_output: int;     (* that too, or by context  *)
       (* mutable t_react: float;    (\* override singleworld *\)
        * mutable t_latency: float;  (\* override context *\) *)
-      mutable throughput: float; (* derivable by count/duration in the end *)
-      mutable memory: float;     (* measure in eat *)
-      mutable duration: float }  (* measure at start/end *)
+       throughput: float; (* derivable by count/duration in the end *)
+       memory: float;     (* measure in eat *)
+       duration: float }  (* measure at start/end *)
 
   let to_csv_row stat =
     Printf.sprintf "\"%d\",\"%d\",\"%f\",\"%f\",\"%f\""
@@ -1115,7 +1115,7 @@ module Bench = struct
       stat.duration
 
   let freshStat () =
-    { n_tested = 0;
+   ref { n_tested = 0;
       n_output = 0;
       (* t_react = 0.0;
        * t_latency = 0.0; *)
@@ -1123,7 +1123,7 @@ module Bench = struct
       memory = 0.0;
       duration = 0.0 }
 
-  effect Inject: stat
+  effect Inject: stat ref
   let inject () = perform Inject
 
   (* Signals end of a measurement *)
@@ -1184,7 +1184,7 @@ module Bench = struct
         let refreshStat () =
           begin
             match (!num mod samplePeriod) with
-            | 0 -> stat.memory <- stat.memory +. (float_of_int (lengths ()))
+            | 0 -> stat := { !stat with memory = !stat.memory +. (float_of_int (lengths ())) }
             | _ -> ()
           end
         in
@@ -1192,8 +1192,8 @@ module Bench = struct
         let rec select tries i = begin
             let next = (i + 1) mod 3 in
             match (tries,i) with
-            |(0,_) ->
-              stat.memory <- stat.memory /. (float_of_int (count / samplePeriod));
+            |(0,_) -> print_string "yay\n";
+              stat := { !stat with memory = !stat.memory /. (float_of_int (count / samplePeriod))   };
               terminate () (* all done, quit *)
             |(_,0) ->
               begin match !s0 with
@@ -1205,6 +1205,7 @@ module Bench = struct
                                S0.push hd; (* TODO measure here *)
                                num := !num + 1;
                                refreshStat ();
+
                                select 3 1
                              end
                           | RNil -> s0 := None; select (tries - 1) (next)
@@ -1237,8 +1238,9 @@ module Bench = struct
                               end
                            | RNil -> s2 := None; select (tries - 1) (next)
               end
+            | _ -> print_string "BAD\n"
           end
-        in select 3 0
+        in print_string "selecting\n"; (select 3 0)
     end
     open Aux
 
@@ -1320,7 +1322,8 @@ module Bench = struct
         !res
       end
 
-  let measure f =
+  let measure f () =
+    let _ = print_string "pre_alloc\n" in
     let a1 = randStream count in
     let a2 = randStream count in
     let a3 = randStream count in
@@ -1331,21 +1334,16 @@ module Bench = struct
     | effect Inject k -> continue k stat
     | _ -> ()
     end;
-    stat.duration <- now () -. start;
-    stat
+    stat := { !stat with duration = now () -. start };
+    print_string (to_csv_row !stat);
+    ()
+    (* stat *)
 
   let context stat action =
-    let onDone _ = stat.n_output <- stat.n_output + 1
+    let onDone _ =
+      stat := { !stat with n_output = !stat.n_output + 1 }
     in
     ManyWorlds.handler onDone action
-
-  (*TODO write a manual interleaving*)
-
-  module SingleWorldBench(T: SomeT) = struct
-    include SingleWorld(T)
-
-                       (* measure reaction time here *)
-  end
 
   let cartesian3 s1 s2 s3 stat =
     let module T = struct type t0 = int
@@ -1355,7 +1353,7 @@ module Bench = struct
                    end
     in
     let module J = Join3Bench(T) in
-    let module S = SingleWorldBench(struct type t = J.result end) in
+    let module S = SingleWorld(struct type t = J.result end) in
     context
       stat
       (fun () ->
@@ -1363,9 +1361,13 @@ module Bench = struct
           (J.correlate (fun () ->
                J.join (s1,s2,s3) (function
                    | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
+                      stat := { !stat with n_tested = !stat.n_tested + 1 };
                       S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
 
+  let test () =
+    Async.run (fun () -> print_string "run\n";
+        (measure cartesian3))
 
 
   (*
@@ -1375,5 +1377,6 @@ module Bench = struct
     CombineLatest
     Affine
 *)
+
 
 end
