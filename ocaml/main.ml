@@ -1089,8 +1089,8 @@ module Bench = struct
 
     (* Stream size *)
   (* let count = 100000000 *)
-  let count = 100000 (* For testing purposes *)
-  let samplePeriod = count/1000 (* How often to sample *)
+  let count = 370 (* For testing purposes *)
+  let samplePeriod = count/10 (* How often to sample *)
   let bound = 1073741823 (* 2^30 - 1, max bound that Random.int accepts *)
 
   let now = Unix.gettimeofday
@@ -1123,29 +1123,29 @@ module Bench = struct
       memory = 0.0;
       duration = 0.0 }
 
-  effect Inject: stat ref
+  effect Inject: (stat ref * (int Evt.evt array * int Evt.evt array * int Evt.evt array))
   let inject () = perform Inject
 
   (* Signals end of a measurement *)
   effect Terminate: 'a
   let terminate () = perform Terminate
 
-  module Join3Bench(T: sig type t0 type t1 type t2 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt * T.t2 evt
-                                                                     and type input = T.t0 evt r * T.t1 evt r * T.t2 evt r
-                                                                     and type result = T.result evt)
+  module Join3Bench: (JOIN with type joined = int evt * int evt * int evt
+                            and type input = int evt r * int evt r * int evt r
+                            and type result = (int * int * int) evt)
     = struct
-    module S0 = Slot(struct type t = T.t0 evt end)
-    module S1 = Slot(struct type t = T.t1 evt end)
-    module S2 = Slot(struct type t = T.t2 evt end)
+    module S0 = Slot(struct type t = int evt end)
+    module S1 = Slot(struct type t = int evt end)
+    module S2 = Slot(struct type t = int evt end)
     type joined = S0.t * S1.t * S2.t
-    type result = T.result evt
+    type result = (int * int * int) evt
     let slots: slots = [|(module S0);(module S1);(module S2)|]
     type input = S0.t r * S1.t r * S2.t r
-                                     effect Join: (input * (joined -> unit)) -> unit
+    effect Join: (input * (joined -> unit)) -> unit
     let join sp f = perform (Join (sp, f))
-                      effect Trigger: joined -> unit
+    effect Trigger: joined -> unit
     let trigger v = perform (Trigger v)
-                      effect SetCont: (joined -> unit) -> unit
+    effect SetCont: (joined -> unit) -> unit
     let setCont c = perform (SetCont c)
 
     module Aux = struct
@@ -1178,69 +1178,59 @@ module Bench = struct
 
       let lengths () = (List.length (S0.getMail ())) + (List.length (S1.getMail ())) + (List.length (S2.getMail ()))
 
-      let eat_all (s0,s1,s2) =
+      let eat_all _ =
         let num = ref 0 in
-        let stat = inject () in
-        let refreshStat () =
+        let (stat, (s0,s1,s2)) = inject () in
+        let refreshStat () = () in
+        let (i0,i1,i2) = (ref 0, ref 0, ref 0) in
+        let rec select tries i =
           begin
-            match (!num mod samplePeriod) with
-            | 0 -> stat := { !stat with memory = !stat.memory +. (float_of_int (lengths ())) }
-            | _ -> ()
-          end
-        in
-        let (s0,s1,s2) = (ref (Some s0), ref (Some s1), ref (Some s2)) in
-        let rec select tries i = begin
+            (* print_int tries;
+             * print_int i;
+             * print_newline(); *)
             let next = (i + 1) mod 3 in
-            match (tries,i) with
-            |(0,_) -> print_string "yay\n";
-              stat := { !stat with memory = !stat.memory /. (float_of_int (count / samplePeriod))   };
-              terminate () (* all done, quit *)
-            |(_,0) ->
-              begin match !s0 with
-              | None -> select (tries - 1) next
-              | Some r -> match Async.await r with
-                          | RCons (hd, tl) ->
-                             begin
-                               s0 := Some tl;
-                               S0.push hd; (* TODO measure here *)
-                               num := !num + 1;
-                               refreshStat ();
-
-                               select 3 1
-                             end
-                          | RNil -> s0 := None; select (tries - 1) (next)
-              end
-            |(_,1) ->
-              begin match !s1 with
-              | None -> select (tries - 1) next
-              | Some r ->  match Async.await r with
-                           | RCons (hd, tl) ->
-                              begin
-                                s1 := Some tl;
-                                S1.push hd; (* TODO measure here *)
-                                num := !num + 1;
-                                refreshStat ();
-                                select 3 2
-                              end
-                           | RNil -> s1 := None; select (tries - 1) (next)
-              end
-            |(_,2) ->
-              begin match !s2 with
-              | None -> select (tries - 1) next
-              | Some r ->  match Async.await r with
-                           | RCons (hd, tl) ->
-                              begin
-                                s2 := Some tl;
-                                S2.push hd; (* TODO measure here *)
-                                num := !num + 1;
-                                refreshStat ();
-                                select 3 0
-                              end
-                           | RNil -> s2 := None; select (tries - 1) (next)
-              end
-            | _ -> print_string "BAD\n"
+            begin
+              match (tries,i) with
+              |(0,_) -> print_string "yay\n"; print_newline();
+                        stat := { !stat with memory = !stat.memory /. (float_of_int (count / samplePeriod))   };
+                        terminate () (* all done, quit *)
+              |(_,0) ->
+                if (!i0 < Array.length s0) then
+                  begin
+                    S0.push (Array.get s0 !i0);
+                    num := !num + 1;
+                    i0 := !i0 + 1;
+                    refreshStat ();
+                    select 3 1
+                  end
+                else
+                  select (tries - 1) next
+              |(_,1) ->
+                if (!i1 < Array.length s1) then
+                  begin
+                    S1.push (Array.get s1 !i1);
+                    num := !num + 1;
+                    i1 := !i1 + 1;
+                    refreshStat ();
+                    select 3 2
+                  end
+                else
+                  select (tries - 1) next
+              |(_,2) ->
+                if (!i2 < Array.length s2) then
+                  begin
+                    S2.push (Array.get s2 !i2);
+                    num := !num + 1;
+                    i2 := !i2 + 1;
+                    refreshStat ();
+                    select 3 0
+                  end
+                else
+                  select (tries - 1) next
+              | _ -> print_string "BAD\n"; print_newline();
+            end
           end
-        in print_string "selecting\n"; (select 3 0)
+        in print_string "selecting\n"; print_newline(); (select 3 0)
     end
     open Aux
 
@@ -1262,17 +1252,17 @@ module Bench = struct
       try action () with
       | effect (S0.Push v) k ->
          let x = List.find (fun (ev,_) -> ev = v) (S0.getMail ()) in
-         forkEach trigger (cartesian0 x);
+         List.iter trigger (cartesian0 x);
          cleanup ();
          continue k ()
       | effect (S1.Push v) k ->
          let x = List.find (fun (ev,_) -> ev = v) (S1.getMail ()) in
-         forkEach trigger (cartesian1 x);
+         List.iter trigger (cartesian1 x);
          cleanup ();
          continue k ()
       | effect (S2.Push v) k ->
          let x = List.find (fun (ev,_) -> ev = v) (S2.getMail ()) in
-         forkEach trigger (cartesian2 x);
+         List.iter trigger (cartesian2 x);
          cleanup ();
          continue k ()
 
@@ -1288,7 +1278,7 @@ module Bench = struct
       | effect (Trigger res) k ->
          match !cont with
          | Some c ->
-            c res
+            continue k (c res)
          | None -> failwith "uninitialized join continuation"
 
     let correlate ?(window=(fun f -> f ())) ?(restriction=(fun f -> f ())) pattern () =
@@ -1322,17 +1312,20 @@ module Bench = struct
         !res
       end
 
+  let randArray n =
+    Array.init n (fun i -> (Ev (Random.int bound, (i,i))))
+
   let measure f () =
     let _ = print_string "pre_alloc\n" in
-    let a1 = randStream count in
-    let a2 = randStream count in
-    let a3 = randStream count in
+    let a1 = randArray count in
+    let a2 = randArray count in
+    let a3 = randArray count in
+    let dummy = toR([Ev (0, (1,1))]) in
     let stat = freshStat () in
     let start = now () in
-    begin try (f a1 a2 a3 stat) with
+    begin try (f dummy stat) with
     | effect Terminate _ -> ()
-    | effect Inject k -> continue k stat
-    | _ -> ()
+    | effect Inject k -> continue k (stat, (a1,a2,a3))
     end;
     stat := { !stat with duration = now () -. start };
     print_string (to_csv_row !stat);
@@ -1345,29 +1338,38 @@ module Bench = struct
     in
     ManyWorlds.handler onDone action
 
-  let cartesian3 s1 s2 s3 stat =
-    let module T = struct type t0 = int
-                          type t1 = int
-                          type t2 = int
-                          type result = int * int * int
-                   end
-    in
-    let module J = Join3Bench(T) in
-    let module S = SingleWorld(struct type t = J.result end) in
+
+  module SingleWorldBench = struct
+  effect Yield  : Join3Bench.result -> unit
+  effect Cancel : unit
+
+  let yield x = perform (Yield x)
+  let cancel () = perform Cancel
+
+  let handler action =
+    match action () with
+    | effect (Yield v) k -> continue k ()
+    | effect Cancel k -> continue k ()
+    | x -> ()
+end
+
+  let cartesian3 dummy stat =
+    let module J = Join3Bench in
+    let module S = SingleWorldBench in
     context
       stat
       (fun () ->
         S.handler
           (J.correlate (fun () ->
-               J.join (s1,s2,s3) (function
+               J.join (dummy,dummy,dummy) (function
                    | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
                       stat := { !stat with n_tested = !stat.n_tested + 1 };
                       S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
 
   let test () =
-    Async.run (fun () -> print_string "run\n";
-        (measure cartesian3))
+    Async.run (fun () -> print_string "run\n"; print_newline();
+                         (measure cartesian3 ()))
 
 
   (*
@@ -1380,3 +1382,5 @@ module Bench = struct
 
 
 end
+
+ let _ = Bench.test ()
