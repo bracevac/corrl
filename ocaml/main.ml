@@ -1430,11 +1430,31 @@ end
                           stat := { !stat with n_output = !stat.n_output + 1 };
                           S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
+  let zip3 stat =
+    let dummy = toR([Ev (0, (1,1))]) in
+    let module J = Join3Bench in
+    let module S = SingleWorldBench in
+    context
+      stat
+      (fun () ->
+        S.handler
+          (J.correlate
+             ~restriction: (fun action ->
+               (with_h [(mostRecent (module J) 0); (mostRecent (module J) 1); (mostRecent (module J) 2); (align3 (module J))]) action ())
+             (fun () ->
+               J.join (dummy,dummy,dummy) (function
+                   | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
+                      stat := { !stat with n_tested = !stat.n_tested + 1 };
+                          stat := { !stat with n_output = !stat.n_output + 1 };
+                          S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
+
 
   let tests =
     [("cartesian",  [370],            cartesian3);
      ("mostRecent", [370;3700;37000;370000;3700000], mostRecent3);
-     ("affine",     [370;3700;37000;370000;3700000], affine3_123)]
+     ("affine",     [370;3700;37000;370000;3700000], affine3_123);
+     ("zip",        [370;3700], zip3)
+    ]
 
   let main () = run tests
 
