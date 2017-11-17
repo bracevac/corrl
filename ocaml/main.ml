@@ -1430,6 +1430,35 @@ end
                           stat := { !stat with n_output = !stat.n_output + 1 };
                           S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
+
+  let align3_bench (join: (module JOIN)) action =
+    let module J = (val join) in
+    let _ = assert ((Array.length J.slots) = 3) in
+    let module S0 = (val (Array.get J.slots 0)) in
+    let module S1 = (val (Array.get J.slots 1)) in
+    let module S2 = (val (Array.get J.slots 2)) in
+    let tryFire () = begin
+        let m0 = List.rev (S0.getMail ()) in
+        let m1 = List.rev (S1.getMail ()) in
+        let m2 = List.rev (S2.getMail ()) in
+        match (m0,m1,m2) with
+        | ((ev0,_)::r0, (ev1,_)::r1, (ev2,_)::r2) ->
+           let res: J.joined = Obj.magic (ev0,ev1,ev2) in (* ugly! *)
+           S0.setMail (List.rev r0);
+           S1.setMail (List.rev r1);
+           S2.setMail (List.rev r2);
+           J.trigger res
+        | _ -> ()
+      end
+    in
+    try action () with
+    | effect (S0.Push _) k ->
+       continue k (tryFire ())
+    | effect (S1.Push _) k ->
+       continue k (tryFire ())
+    | effect (S2.Push _) k ->
+       continue k (tryFire ())
+
   let zip3 stat =
     let dummy = toR([Ev (0, (1,1))]) in
     let module J = Join3Bench in
@@ -1440,7 +1469,7 @@ end
         S.handler
           (J.correlate
              ~restriction: (fun action ->
-               (with_h [(mostRecent (module J) 0); (mostRecent (module J) 1); (mostRecent (module J) 2); (align3 (module J))]) action ())
+               (with_h [(mostRecent (module J) 0); (mostRecent (module J) 1); (mostRecent (module J) 2); (align3_bench (module J))]) action ())
              (fun () ->
                J.join (dummy,dummy,dummy) (function
                    | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
@@ -1450,10 +1479,11 @@ end
 
 
   let tests =
-    [("cartesian",  [370],            cartesian3);
+    [
+     ("cartesian",  [370],            cartesian3); (* cartesian is way too slow for other input sizes  *)
      ("mostRecent", [370;3700;37000;370000;3700000], mostRecent3);
      ("affine",     [370;3700;37000;370000;3700000], affine3_123);
-     ("zip",        [370;3700], zip3)
+     ("zip",        [370;3700;37000;370000;3700000], zip3)
     ]
 
   let main () = run tests
