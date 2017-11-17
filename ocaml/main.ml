@@ -1087,17 +1087,19 @@ end
 
 module Bench = struct
 
-    (* Stream size *)
-  (* let count = 100000000 *)
-  let count = 370 (* For testing purposes *)
+  (* Stream size *)
+  let arity = 3
+  let count = 370 (* event count for one input stream *)
+  let repetitions = 10
   let samples  = 10
-  let samplePeriod = 3*count/samples (* How often to sample *)
   let bound = 1073741823 (* 2^30 - 1, max bound that Random.int accepts *)
 
   let now = Unix.gettimeofday
 
   type stat =
-    {  n_tested: int;     (* measure by pattern cont.  *)
+    {  name: string;
+       count: int;
+       n_tested: int;     (* measure by pattern cont.  *)
        n_output: int;     (* that too, or by context  *)
       (* mutable t_react: float;    (\* override singleworld *\)
        * mutable t_latency: float;  (\* override context *\) *)
@@ -1105,9 +1107,11 @@ module Bench = struct
        memory: float;     (* measure in eat *)
        duration: float }  (* measure at start/end *)
 
-  let csv_header = "n_tested,n_output,throughput,memory,duration"
+  let csv_header = "name,count,n_tested,n_output,throughput,memory,duration"
   let to_csv_row stat =
-    Printf.sprintf "\"%d\",\"%d\",\"%f\",\"%f\",\"%f\""
+    Printf.sprintf "\"%s\",\"%d\",\"%d\",\"%d\",\"%f\",\"%f\",\"%f\""
+      stat.name
+      stat.count
       stat.n_tested
       stat.n_output
       (* stat.t_react
@@ -1116,14 +1120,16 @@ module Bench = struct
       stat.memory
       stat.duration
 
-  let freshStat () =
-   ref { n_tested = 0;
-      n_output = 0;
-      (* t_react = 0.0;
-       * t_latency = 0.0; *)
-      throughput = 0.0;
-      memory = 0.0;
-      duration = 0.0 }
+  let freshStat key cnt =
+    ref { name = key;
+          count = cnt;
+          n_tested = 0;
+          n_output = 0;
+          (* t_react = 0.0;
+           * t_latency = 0.0; *)
+          throughput = 0.0;
+          memory = 0.0;
+          duration = 0.0 }
 
   effect Inject: (stat ref * (int Evt.evt array * int Evt.evt array * int Evt.evt array))
   let inject () = perform Inject
@@ -1183,6 +1189,7 @@ module Bench = struct
       let eat_all _ =
         let num = ref 0 in
         let (stat, (s0,s1,s2)) = inject () in
+        let samplePeriod = arity * !stat.count / samples in
         let refreshStat () =
           begin
             match (!num mod samplePeriod) with
@@ -1199,8 +1206,7 @@ module Bench = struct
             let next = (i + 1) mod 3 in
             begin
               match (tries,i) with
-              |(0,_) -> print_string "yay\n"; print_newline();
-                        stat := { !stat with memory = !stat.memory /. (float_of_int samples)   };
+              |(0,_) -> stat := { !stat with memory = !stat.memory /. (float_of_int samples)   };
                         terminate () (* all done, quit *)
               |(_,0) ->
                 if (!i0 < Array.length s0) then
@@ -1238,7 +1244,7 @@ module Bench = struct
               | _ -> print_string "BAD\n"; print_newline();
             end
           end
-        in print_string "selecting\n"; print_newline(); (select 3 0)
+        in (select 3 0)
     end
     open Aux
 
@@ -1323,26 +1329,35 @@ module Bench = struct
   let randArray n =
     Array.init n (fun i -> (Ev (Random.int bound, (i,i))))
 
-  let measure f () =
-    let _ = print_string "pre_alloc\n" in
+  let measure key count thunk =
     let a1 = randArray count in
     let a2 = randArray count in
     let a3 = randArray count in
-    let stat = freshStat () in
+    let stat = freshStat key count in
     let start = now () in
-    begin try (f stat) with
+    begin try (thunk stat) with
     | effect Terminate _ -> ()
     | effect Inject k -> continue k (stat, (a1,a2,a3))
     end;
     let duration = now () -. start in
     stat := { !stat with duration = duration;
-                         throughput = (float_of_int (3 * count)) /. duration };
-    print_string csv_header;
-    print_newline ();
+                         throughput = (float_of_int (arity * count)) /. duration };
     print_string (to_csv_row !stat);
     print_newline ();
     ()
     (* stat *)
+
+
+  let run tests =
+    print_string csv_header;
+    print_newline ();
+    List.iter
+      (fun (key, counts, thunk) ->
+        List.iter
+          (fun count ->
+            measure key count thunk)
+          counts)
+      tests
 
   let context stat action =
     let onDone _ =
@@ -1380,10 +1395,48 @@ end
                           stat := { !stat with n_output = !stat.n_output + 1 };
                           S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
+  let mostRecent3 stat =
+    let dummy = toR([Ev (0, (1,1))]) in
+    let module J = Join3Bench in
+    let module S = SingleWorldBench in
+    context
+      stat
+      (fun () ->
+        S.handler
+          (J.correlate
+             ~restriction: (fun action ->
+               (with_h [(mostRecent (module J) 0); (mostRecent (module J) 1); (mostRecent (module J) 2)]) action ())
+             (fun () ->
+               J.join (dummy,dummy,dummy) (function
+                   | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
+                      stat := { !stat with n_tested = !stat.n_tested + 1 };
+                          stat := { !stat with n_output = !stat.n_output + 1 };
+                          S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
-  let test () =
-    Async.run (fun () -> print_string "run\n"; print_newline();
-                         (measure cartesian3 ()))
+  let affine3_123 stat =
+    let dummy = toR([Ev (0, (1,1))]) in
+    let module J = Join3Bench in
+    let module S = SingleWorldBench in
+    context
+      stat
+      (fun () ->
+        S.handler
+          (J.correlate
+             ~restriction: (fun action -> (with_h [(affine 1 (module J) 0); (affine 1 (module J) 1); (affine 1 (module J) 2)]) action ())
+             (fun () ->
+               J.join (dummy,dummy,dummy) (function
+                   | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
+                      stat := { !stat with n_tested = !stat.n_tested + 1 };
+                          stat := { !stat with n_output = !stat.n_output + 1 };
+                          S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
+
+
+  let tests =
+    [("cartesian",  [370],            cartesian3);
+     ("mostRecent", [370;3700;37000], mostRecent3);
+     ("affine",     [370;3700;37000], affine3_123)]
+
+  let main () = run tests
 
 
   (*
@@ -1397,4 +1450,4 @@ end
 
 end
 
- let _ = Bench.test ()
+let _ = Bench.main ()
