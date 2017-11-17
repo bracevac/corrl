@@ -1433,20 +1433,10 @@ end
 
   let tests =
     [("cartesian",  [370],            cartesian3);
-     ("mostRecent", [370;3700;37000], mostRecent3);
-     ("affine",     [370;3700;37000], affine3_123)]
+     ("mostRecent", [370;3700;37000;370000;3700000], mostRecent3);
+     ("affine",     [370;3700;37000;370000;3700000], affine3_123)]
 
   let main () = run tests
-
-
-  (*
-    Join by id
-    Join by timing
-    Zip
-    CombineLatest
-    Affine
-*)
-
 
 end
 
