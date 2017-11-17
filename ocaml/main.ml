@@ -1090,7 +1090,8 @@ module Bench = struct
     (* Stream size *)
   (* let count = 100000000 *)
   let count = 370 (* For testing purposes *)
-  let samplePeriod = count/10 (* How often to sample *)
+  let samples  = 10
+  let samplePeriod = 3*count/samples (* How often to sample *)
   let bound = 1073741823 (* 2^30 - 1, max bound that Random.int accepts *)
 
   let now = Unix.gettimeofday
@@ -1104,6 +1105,7 @@ module Bench = struct
        memory: float;     (* measure in eat *)
        duration: float }  (* measure at start/end *)
 
+  let csv_header = "n_tested,n_output,throughput,memory,duration"
   let to_csv_row stat =
     Printf.sprintf "\"%d\",\"%d\",\"%f\",\"%f\",\"%f\""
       stat.n_tested
@@ -1181,7 +1183,13 @@ module Bench = struct
       let eat_all _ =
         let num = ref 0 in
         let (stat, (s0,s1,s2)) = inject () in
-        let refreshStat () = () in
+        let refreshStat () =
+          begin
+            match (!num mod samplePeriod) with
+            | 0 -> stat := { !stat with memory = !stat.memory +. (float_of_int (lengths ())) }
+            | _ -> ()
+          end
+        in
         let (i0,i1,i2) = (ref 0, ref 0, ref 0) in
         let rec select tries i =
           begin
@@ -1192,7 +1200,7 @@ module Bench = struct
             begin
               match (tries,i) with
               |(0,_) -> print_string "yay\n"; print_newline();
-                        stat := { !stat with memory = !stat.memory /. (float_of_int (count / samplePeriod))   };
+                        stat := { !stat with memory = !stat.memory /. (float_of_int samples)   };
                         terminate () (* all done, quit *)
               |(_,0) ->
                 if (!i0 < Array.length s0) then
@@ -1320,15 +1328,19 @@ module Bench = struct
     let a1 = randArray count in
     let a2 = randArray count in
     let a3 = randArray count in
-    let dummy = toR([Ev (0, (1,1))]) in
     let stat = freshStat () in
     let start = now () in
-    begin try (f dummy stat) with
+    begin try (f stat) with
     | effect Terminate _ -> ()
     | effect Inject k -> continue k (stat, (a1,a2,a3))
     end;
-    stat := { !stat with duration = now () -. start };
+    let duration = now () -. start in
+    stat := { !stat with duration = duration;
+                         throughput = (float_of_int (3 * count)) /. duration };
+    print_string csv_header;
+    print_newline ();
     print_string (to_csv_row !stat);
+    print_newline ();
     ()
     (* stat *)
 
@@ -1353,7 +1365,8 @@ module Bench = struct
     | x -> ()
 end
 
-  let cartesian3 dummy stat =
+  let cartesian3 stat =
+    let dummy = toR([Ev (0, (1,1))]) in
     let module J = Join3Bench in
     let module S = SingleWorldBench in
     context
@@ -1364,7 +1377,8 @@ end
                J.join (dummy,dummy,dummy) (function
                    | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
                       stat := { !stat with n_tested = !stat.n_tested + 1 };
-                      S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
+                          stat := { !stat with n_output = !stat.n_output + 1 };
+                          S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
 
 
   let test () =
