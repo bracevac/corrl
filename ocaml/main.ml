@@ -28,14 +28,24 @@ module type ASYNC = sig
 end
 
 module Async : ASYNC = struct
+  type 'a queue = 'a Queue.t
 
   type 'a _promise =
-    Waiting of ('a,unit) continuation list
+    Waiting of ('a,unit) continuation queue
   | Done of 'a
 
   type 'a promise = 'a _promise ref
 
   let liftPromise x = ref (Done x)
+
+  type 'a _channel =
+    ChWaiting of (('a, unit) continuation * (('a, unit) continuation queue))
+  | ChEmpty
+  | ChValues of 'a * ('a queue)
+
+  type 'a channel = 'a _channel ref
+
+  let channel () = ref ChEmpty
 
   effect Async : (unit -> 'a) -> 'a promise
   let async f = perform (Async f)
@@ -45,6 +55,29 @@ module Async : ASYNC = struct
 
   effect Await : 'a promise -> 'a
   let await p = perform (Await p)
+
+  effect Receive: 'a channel -> 'a
+  let receive chan =
+    match !chan with
+    | ChValues (v, q) ->
+       chan := if (Queue.is_empty q)
+               then ChEmpty
+               else ChValues (Queue.pop q, q);
+       v
+    | _ -> perform (Receive chan)
+
+  let emit chan v =
+    match !chan with
+    | ChValues (v', q) ->
+       Queue.add v q;
+       chan := ChValues (v', q)
+    | ChEmpty ->
+       chan := ChValues (v, (Queue.create ()))
+    | ChWaiting (c, q) ->
+       chan := if (Queue.is_empty q)
+               then ChEmpty
+               else ChWaiting (Queue.pop q, q);
+       continue c v
 
   let q = Queue.create ()
   let enqueue t = Queue.push t q
@@ -57,13 +90,13 @@ module Async : ASYNC = struct
       fun pr main ->
         match main () with
         | v -> begin match !pr with
-               | Waiting l -> pr := Done v; List.iter (fun task -> enqueue (fun () -> continue task v)) l
+               | Waiting l -> pr := Done v; Queue.iter (fun task -> enqueue (fun () -> continue task v)) l
                | Done _ -> failwith "Promise already resolved"
                end;
                dequeue ()
 
         | effect (Async f) k ->
-           let p = ref (Waiting []) in
+           let p = ref (Waiting (Queue.create ())) in
            enqueue (fun () -> continue k p);
            fork p f
 
@@ -72,16 +105,18 @@ module Async : ASYNC = struct
             dequeue ()
 
         | effect (Await p) k ->
+           (* TODO move the Done case to the client *)
             begin match !p with
             | Done v -> continue k v
-            | Waiting l ->
-               p := Waiting (l @ [k]);
+            | Waiting q ->
+               Queue.add k q;
                dequeue ()
             end
     in
-    fork (ref (Waiting [])) main
+    fork (ref (Waiting (Queue.create ()))) main
 
-  let interleaved thunks = failwith "interleaved not implemented" (*TODO*)
+  let interleaved thunks =
+    failwith "interleaved not implemented" (*TODO*)
 end
 
 
@@ -1490,4 +1525,4 @@ end
 
 end
 
-let _ = Bench.main ()
+(* let _ = Bench.main () *)
