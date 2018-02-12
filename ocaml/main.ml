@@ -13,17 +13,21 @@ module DelimCont: DELIMCONT = struct
 end
 
 module type ASYNC = sig
-  type 'a promise
   (** Type of promises *)
-  val async : (unit -> 'a) -> 'a promise
+  type 'a promise
+  (** Type of channels *)
+  type 'a channel
   (** [async f] runs [f] concurrently *)
-  val await : 'a promise -> 'a
+  val async : (unit -> 'a) -> 'a promise
   (** [await p] returns the result of the promise. *)
-  val yield : unit -> unit
+  val await : 'a promise -> 'a
   (** yields control to another task *)
-  val run   : (unit -> 'a) -> unit
+  val yield : unit -> unit
   (** Runs the scheduler *)
+  val run   : (unit -> 'a) -> unit
   val liftPromise : 'a -> 'a promise
+  val emit : 'a channel -> 'a -> unit
+  val receive: 'a channel -> 'a
   val interleaved : (unit -> unit) list -> unit
 end
 
@@ -54,7 +58,9 @@ module Async : ASYNC = struct
   let yield () = perform Yield
 
   effect Await : 'a promise -> 'a
-  let await p = perform (Await p)
+  let await p = match !p with
+    | Done v -> v
+    | _ -> perform (Await p)
 
   effect Receive: 'a channel -> 'a
   let receive chan =
@@ -66,6 +72,7 @@ module Async : ASYNC = struct
        v
     | _ -> perform (Receive chan)
 
+  effect Emit: ('a channel * 'a) -> unit
   let emit chan v =
     match !chan with
     | ChValues (v', q) ->
@@ -73,11 +80,7 @@ module Async : ASYNC = struct
        chan := ChValues (v', q)
     | ChEmpty ->
        chan := ChValues (v, (Queue.create ()))
-    | ChWaiting (c, q) ->
-       chan := if (Queue.is_empty q)
-               then ChEmpty
-               else ChWaiting (Queue.pop q, q);
-       continue c v
+    | _ -> perform (Emit (chan, v))
 
   let q = Queue.create ()
   let enqueue t = Queue.push t q
@@ -85,33 +88,60 @@ module Async : ASYNC = struct
     if Queue.is_empty q then ()
     else Queue.pop q ()
 
+  (* type _ action =
+   *     Fork: ('a promise * (unit -> 'a)) -> 'a action
+   *   | Continue: (('a, 'b) continuation * 'a) -> 'b action *)
+
   let run main =
-    let rec fork : 'a. 'a promise -> (unit -> 'a) -> unit =
-      fun pr main ->
-        match main () with
-        | v -> begin match !pr with
-               | Waiting l -> pr := Done v; Queue.iter (fun task -> enqueue (fun () -> continue task v)) l
-               | Done _ -> failwith "Promise already resolved"
-               end;
-               dequeue ()
+    let rec schedule_next () = dequeue ()
+      (* match dequeue () with
+       * | Fork p f -> fork p f
+       * | Continue c v -> continue c v
+       * |  *)
+    and fork : 'a. 'a promise -> (unit -> 'a) -> unit = fun pr main ->
+      match main () with
+      | v ->
+         begin match !pr with
+         | Waiting q ->
+            pr := Done v;
+            Queue.iter (fun task -> enqueue (fun () -> continue task v)) q
+         | Done _ -> failwith "Promise already resolved"
+         end;
+         schedule_next ()
 
-        | effect (Async f) k ->
-           let p = ref (Waiting (Queue.create ())) in
-           enqueue (fun () -> continue k p);
-           fork p f
+      | effect (Async f) k ->
+         let p = ref (Waiting (Queue.create ())) in
+         enqueue (fun () -> continue k p);
+         enqueue (fun () -> fork p f);
 
-        | effect Yield k ->
+      | effect Yield k ->
+         enqueue (continue k);
+         schedule_next ()
+
+      | effect (Await p) k ->
+         begin match !p with
+         | Waiting q -> Queue.add k q
+         | _ -> failwith "Await: this should not happen"
+         end; schedule_next ()
+
+      | effect (Emit (chan, v)) k ->
+         begin match !chan with
+         | ChWaiting (c, q) ->
+            (*TODO not sure which enqueue order makes more sense*)
+            enqueue (fun () -> continue c v);
             enqueue (continue k);
-            dequeue ()
+            chan := if (Queue.is_empty q)
+                    then ChEmpty
+                    else ChWaiting (Queue.pop q, q)
+         | _ -> failwith "Emit: this should not happen"
+         end; schedule_next ()
 
-        | effect (Await p) k ->
-           (* TODO move the Done case to the client *)
-            begin match !p with
-            | Done v -> continue k v
-            | Waiting q ->
-               Queue.add k q;
-               dequeue ()
-            end
+      | effect (Receive chan) k ->
+         begin match !chan with
+         | ChEmpty -> chan := ChWaiting (k, (Queue.create ()))
+         | ChWaiting (c, q) -> Queue.add k q
+         | _ -> failwith "Receive: this should not happen"
+         end; schedule_next ()
     in
     fork (ref (Waiting (Queue.create ()))) main
 
