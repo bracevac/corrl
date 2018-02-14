@@ -12,6 +12,8 @@ module DelimCont: DELIMCONT = struct
     | effect (Shift f) k -> f (fun x -> continue k x)
 end
 
+let println s = print_string s; print_newline ()
+
 module type ASYNC = sig
   (** Type of promises *)
   type 'a promise
@@ -28,7 +30,7 @@ module type ASYNC = sig
   val liftPromise : 'a -> 'a promise
   val emit : 'a channel -> 'a -> unit
   val receive: 'a channel -> 'a
-  val interleaved : (unit -> unit) list -> unit
+  val interleaved : (unit -> unit) array -> unit
 end
 
 module Async : ASYNC = struct
@@ -111,8 +113,12 @@ module Async : ASYNC = struct
 
       | effect (Async f) k ->
          let p = ref (Waiting (Queue.create ())) in
+         (* Let async return immediately, which allows the caller to spawn multiple computations, if desired.
+            Alternative is to let Async take a collection of arguments, so that it interacts more robustly
+            with different scheduling algorithms. *)
          enqueue (fun () -> continue k p);
          enqueue (fun () -> fork p f);
+         schedule_next ()
 
       | effect Yield k ->
          enqueue (continue k);
@@ -145,10 +151,43 @@ module Async : ASYNC = struct
     in
     fork (ref (Waiting (Queue.create ()))) main
 
+(* Interleave the given thunks, keeping the current context in sync.
+   Careful: We assume a cooperative concurrency model, i.e., each thunk
+   sufficiently often invokes async operations, at which point we may reschedule.
+   The use of interleaved in corrl upholds this assumption. *)
   let interleaved thunks =
-    failwith "interleaved not implemented" (*TODO*)
+    let n = Array.length thunks in
+    match n with
+    | 0 -> ()
+    | 1 -> (Array.get thunks 0) ()
+    | _ ->
+       let chan = channel () in
+       let count = ref n in
+       let thunks = Array.map (fun thunk -> (fun () -> thunk (); count := !count - 1)) thunks in
+       let handle thunk () =
+         try thunk () with
+         | effect (Await p) k ->
+            let _ = async (fun () ->
+                        let v = await p in
+                        emit chan (fun () -> continue k v)) in ()
+         | effect Yield k ->
+            let _ = async (fun () ->
+                        let _ = yield () in
+                        emit chan (fun () -> continue k ())) in ()
+         | effect (Emit x) k ->
+            let _ = async (fun () ->
+                        perform (Emit x);
+                        emit chan (fun () -> continue k ())) in ()
+         | effect (Receive chan') k ->
+            let _ = async (fun () ->
+                        let v = receive chan' in
+                        emit chan (fun () -> continue k v)) in ()
+       in
+       Array.iter (fun thunk -> handle thunk ()) thunks;
+       while (!count > 0) do
+         (receive chan) ()
+       done
 end
-
 
 (* Time models are monoids over some time representation *)
 module type TIMEMODEL = sig
@@ -197,6 +236,45 @@ module Reactive = struct
     | RCons (hd, tl) -> (f hd); eat f tl
     | RNil -> ()
 end
+
+module TestInterleaved = struct
+  open Reactive
+  let streams = [|liftArray [|"1";"2";"3";"4"|];
+                  liftArray [|"a";"b";"c";"d"|];
+                  liftArray [|"H";"I";"J";"K"|]|]
+
+  effect Shout: string -> unit
+  let shout s = perform (Shout s)
+
+  effect Get: int
+  let get () = perform Get
+
+  effect Set: int -> unit
+  let set v = perform (Set v)
+
+  let with_state body =
+    match body () with
+    | x -> (fun _ -> x)
+    | effect Get k -> (fun (st: int) -> continue k st st)
+    | effect (Set x) k -> (fun _ -> continue k () x)
+
+  let run () =
+    let thunks = Array.map (fun stream -> (fun () -> eat shout stream)) streams in
+    let body () =
+      begin
+        try Async.interleaved thunks with
+        | effect (Shout s) k ->
+           set (get () + 1);
+           print_int (get ());
+           print_string ": ";
+           println s;
+           continue k ()
+      end
+    in
+    Async.run (fun () ->
+        (with_state body 0))
+end
+
 
 open Evt
 open Evt.Time
