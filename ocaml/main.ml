@@ -1,17 +1,3 @@
-module type DELIMCONT = sig
-  effect Shift: (('a -> unit) -> unit) -> 'a
-  val shift: (('a -> unit) -> unit) -> 'a
-  val reset: (unit -> unit) -> unit
-end
-
-module DelimCont: DELIMCONT = struct
-  effect Shift: (('a -> unit) -> unit) -> 'a
-  let shift k = perform (Shift k)
-  let reset action =
-    try action () with
-    | effect (Shift f) k -> f (fun x -> continue k x)
-end
-
 let println s = print_string s; print_newline ()
 
 module type ASYNC = sig
@@ -1036,7 +1022,7 @@ module Test = struct
       Printf.sprintf "%d. <%d@[%d,%d]>" !count a t1 t2
     in
     Async.run (fun () ->
-        DelimCont.reset (correlation show s1))
+        correlation show s1)
 
   let test2 correlation () =
     let (s1,s2,_,_) = testStreams in
@@ -1046,7 +1032,7 @@ module Test = struct
       Printf.sprintf "%d. <(%d,%s)@[%d,%d]>" !count a b t1 t2
     in
     Async.run (fun () ->
-        DelimCont.reset (correlation show s1 s2))
+        correlation show s1 s2)
 
   let test3 correlation () =
     let (s1,s2,s3,_) = testStreams in
@@ -1056,7 +1042,7 @@ module Test = struct
       Printf.sprintf "%d. <(%d,%s,%.2f)@[%d,%d]>" !count a b c t1 t2
     in
     Async.run (fun () ->
-        DelimCont.reset (correlation show s1 s2 s3))
+        correlation show s1 s2 s3)
 
   let test4 correlation () =
     let (s1,s2,s3,s4) = testStreams in
@@ -1066,7 +1052,7 @@ module Test = struct
       Printf.sprintf "%d. <(%d,%s,%.2f,%d)@[%d,%d]>" !count a b c d t1 t2
     in
     Async.run (fun () ->
-        DelimCont.reset (correlation show s1 s2 s3 s4))
+        correlation show s1 s2 s3 s4)
 
   let cartesian1 (type a)
         (show: a  evt -> string)
