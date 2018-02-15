@@ -60,39 +60,19 @@ module Async : ASYNC = struct
   let yield () = perform Yield
 
   effect Await : 'a promise -> 'a
-  let await p = match !p with
-    | Done v -> v
-    | _ -> perform (Await p)
+  let await p = perform (Await p)
 
   effect Receive: 'a channel -> 'a
-  let receive chan =
-    match !chan with
-    | ChValues (v, q) ->
-       chan := if (Queue.is_empty q)
-               then ChEmpty
-               else ChValues (Queue.pop q, q);
-       v
-    | _ -> perform (Receive chan)
+  let receive chan = perform (Receive chan)
 
   effect Emit: ('a channel * 'a) -> unit
-  let emit chan v =
-    match !chan with
-    | ChValues (v', q) ->
-       Queue.add v q;
-       chan := ChValues (v', q)
-    | ChEmpty ->
-       chan := ChValues (v, (Queue.create ()))
-    | _ -> perform (Emit (chan, v))
+  let emit chan v = perform (Emit (chan, v))
 
   let q = Queue.create ()
   let enqueue t = Queue.push t q
   let dequeue () =
     if Queue.is_empty q then ()
     else Queue.pop q ()
-
-  (* type _ action =
-   *     Fork: ('a promise * (unit -> 'a)) -> 'a action
-   *   | Continue: (('a, 'b) continuation * 'a) -> 'b action *)
 
   let run main =
     let rec schedule_next () = dequeue ()
@@ -116,9 +96,8 @@ module Async : ASYNC = struct
          (* Let async return immediately, which allows the caller to spawn multiple computations, if desired.
             Alternative is to let Async take a collection of arguments, so that it interacts more robustly
             with different scheduling algorithms. *)
-         enqueue (fun () -> continue k p);
          enqueue (fun () -> fork p f);
-         schedule_next ()
+         continue k p;
 
       | effect Yield k ->
          enqueue (continue k);
@@ -127,7 +106,7 @@ module Async : ASYNC = struct
       | effect (Await p) k ->
          begin match !p with
          | Waiting q -> Queue.add k q
-         | _ -> failwith "Await: this should not happen"
+         | Done v -> enqueue (fun () -> continue k v)
          end; schedule_next ()
 
       | effect (Emit (chan, v)) k ->
@@ -135,18 +114,25 @@ module Async : ASYNC = struct
          | ChWaiting (c, q) ->
             (*TODO not sure which enqueue order makes more sense*)
             enqueue (fun () -> continue c v);
-            enqueue (continue k);
             chan := if (Queue.is_empty q)
                     then ChEmpty
                     else ChWaiting (Queue.pop q, q)
-         | _ -> failwith "Emit: this should not happen"
-         end; schedule_next ()
+         | ChValues (v', q) ->
+           Queue.add v q;
+           chan := ChValues (v', q)
+         | ChEmpty ->
+           chan := ChValues (v, (Queue.create ()))
+         end; enqueue (continue k); schedule_next ()
 
       | effect (Receive chan) k ->
          begin match !chan with
          | ChEmpty -> chan := ChWaiting (k, (Queue.create ()))
          | ChWaiting (c, q) -> Queue.add k q
-         | _ -> failwith "Receive: this should not happen"
+         | ChValues (v, q) ->
+             chan := if (Queue.is_empty q)
+                     then ChEmpty
+                     else ChValues (Queue.pop q, q);
+           enqueue (fun () -> continue k v)
          end; schedule_next ()
     in
     fork (ref (Waiting (Queue.create ()))) main
@@ -185,7 +171,7 @@ module Async : ASYNC = struct
        in
        Array.iter (fun thunk -> handle thunk ()) thunks;
        while (!count > 0) do
-         (receive chan) ()
+         (receive chan) ();
        done
 end
 
@@ -252,12 +238,15 @@ module TestInterleaved = struct
   effect Set: int -> unit
   let set v = perform (Set v)
 
+  (* Outer (=shared) state context, which should remain synchronized between each interleaved strand *)
   let with_state body =
     match body () with
     | x -> (fun _ -> x)
     | effect Get k -> (fun (st: int) -> continue k st st)
     | effect (Set x) k -> (fun _ -> continue k () x)
 
+  (* If interleaved works correctly, then the outputs should have a consecutive line numbering,
+     starting from 1 and incremented by 1 each line.*)
   let run () =
     let thunks = Array.map (fun stream -> (fun () -> eat shout stream)) streams in
     let body () =
