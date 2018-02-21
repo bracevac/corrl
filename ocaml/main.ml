@@ -1,4 +1,12 @@
+module type SomeT = sig
+  type t
+end
+
 let println s = print_string s; print_newline ()
+
+let with_h hs action =
+  let comp h thnk = (fun () -> (h thnk)) in
+  List.fold_right comp hs action
 
 module type ASYNC = sig
   (** Type of promises *)
@@ -139,26 +147,47 @@ module Async : ASYNC = struct
        let handle thunk () =
          try thunk () with
          | effect (Await p) k ->
-            let _ = async (fun () ->
-                        let v = await p in
-                        emit chan (fun () -> continue k v)) in ()
+           let _ = async (fun () ->
+               let v = await p in
+               emit chan (fun () -> continue k v)) in ()
          | effect Yield k ->
             let _ = async (fun () ->
-                        let _ = yield () in
-                        emit chan (fun () -> continue k ())) in ()
+               let _ = yield () in
+               emit chan (fun () -> continue k ())) in ()
          | effect (Emit x) k ->
             let _ = async (fun () ->
-                        perform (Emit x);
-                        emit chan (fun () -> continue k ())) in ()
+               perform (Emit x);
+               emit chan (fun () -> continue k ())) in ()
          | effect (Receive chan') k ->
             let _ = async (fun () ->
-                        let v = receive chan' in
-                        emit chan (fun () -> continue k v)) in ()
+               let v = receive chan' in
+               emit chan (fun () -> continue k v)) in ()
        in
+       println "spawn!";
        Array.iter (fun thunk -> handle thunk ()) thunks;
+       println "spawn done!";
        while (!count > 0) do
+         println "receive!";
          (receive chan) ();
-       done
+       done;
+       println "interleaved done"
+end
+
+module Suspendable(T: SomeT) = struct
+  type t = T.t
+  effect Set: (t, unit) continuation option -> unit
+  let set k = perform (Set k)
+  effect Get: (t, unit) continuation option
+  let get () = perform Get
+
+  let state_handler action =
+    let state = ref None in
+    try action () with
+    | effect (Set contopt) k ->
+      state := contopt;
+      continue k ()
+    | effect Get k ->
+      continue k !state
 end
 
 (* Time models are monoids over some time representation *)
@@ -215,8 +244,8 @@ module TestInterleaved = struct
                   liftArray [|"a";"b";"c";"d"|];
                   liftArray [|"H";"I";"J";"K"|]|]
 
-  effect Shout: string -> unit
-  let shout s = perform (Shout s)
+  effect Shout: (int * string) -> unit
+  let shout i s = perform (Shout (i,s))
 
   effect Get: int
   let get () = perform Get
@@ -231,14 +260,15 @@ module TestInterleaved = struct
     | effect Get k -> (fun (st: int) -> continue k st st)
     | effect (Set x) k -> (fun _ -> continue k () x)
 
+
   (* If interleaved works correctly, then the outputs should have a consecutive line numbering,
      starting from 1 and incremented by 1 each line.*)
-  let run () =
-    let thunks = Array.map (fun stream -> (fun () -> eat shout stream)) streams in
+  let testVanilla () =
+    let thunks = Array.mapi (fun i stream () -> eat (shout i) stream) streams in
     let body () =
       begin
         try Async.interleaved thunks with
-        | effect (Shout s) k ->
+        | effect (Shout (_,s)) k ->
            set (get () + 1);
            print_int (get ());
            print_string ": ";
@@ -248,16 +278,63 @@ module TestInterleaved = struct
     in
     Async.run (fun () ->
         (with_state body 0))
+
+  (* Additionally test the capability to suspend strands TODO: fix bug *)
+  let testSuspendable () =
+    let thunks = Array.mapi (fun i stream () -> eat (shout i) stream) streams in
+    let module S2 = Suspendable(struct type t = unit end) in
+    let suspendable thunk = begin
+      println "suspendable";
+      try thunk () with
+      | effect (Shout p) k ->
+        S2.set (Some k);
+        println "forwarding shout";
+        perform (Shout p); (* BUG: somehow, we manage resume into the line above, should be line after *)
+        println "forwarding resumed";
+        match S2.get ()  with
+        | Some k' -> println "continue"; S2.set None; continue k' ()
+        | None -> println "stashed"; ()
+    end in
+    let old = Array.get thunks 2 in
+    let _ = Array.set thunks 2 (fun () -> suspendable old) in
+    let stash = ref None in
+    let state = ref 0 in
+    let body () =
+      begin
+        try Async.interleaved thunks with
+        | effect (Shout (i,s)) k ->
+          print_string "shout!"; print_int i; print_newline ();
+          if i = 2 && !state == 0 then begin
+            println "stashing strand 2";
+            state := 1;
+            stash := S2.get ();
+            S2.set None
+          end
+          else ();
+          set (get () + 1);
+          print_int (get ());
+          print_string ": ";
+          println s;
+          if (get ()) > 6 && !state == 1 then begin
+            println "reviving strand 2";
+            let (Some cont) = !stash in
+            stash := None;
+            S2.set (Some cont);
+            continue cont ();
+            println "and continuing immediately";
+          end
+          else ();
+          continue k ()
+      end
+    in
+    Async.run (fun () ->
+        S2.state_handler (fun () -> (with_state body 0)))
 end
 
 
 open Evt
 open Evt.Time
 open Reactive
-
-module type SomeT = sig
-  type t
-end
 
 module type SINGLEWORLD = sig
   type t
@@ -390,10 +467,6 @@ module Slot(T: SomeT): (SLOT with type t = T.t) = struct
 end
 
 type slots = (module SLOT) array
-
-let with_h hs action =
-  let comp h thnk = (fun () -> (h thnk)) in
-  List.fold_right comp hs action
 
 let rec forkEach f = function
   | [] -> ()
