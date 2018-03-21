@@ -1,9 +1,12 @@
-EXE := main.native
+EXE := main.native main.byte
 
 all: $(EXE)
 
 %.native: %.ml
-	ocamlbuild -pkg unix $@
+	ocamlbuild -cflag -g -pkg unix $@
+
+%.byte: %.ml
+	ocamlbuild -cflag -g -lflag -g -pkg unix $@
 
 .PHONY: clean
 clean:
