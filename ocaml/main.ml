@@ -25,6 +25,7 @@ module type ASYNC = sig
   val emit : 'a channel -> 'a -> unit
   val receive: 'a channel -> 'a
   val interleaved : (unit -> unit) array -> unit
+  val get_context: unit -> ((unit -> unit) -> unit)
 end
 
 module Async : ASYNC = struct
@@ -61,6 +62,9 @@ module Async : ASYNC = struct
 
   effect Emit: ('a channel * 'a) -> unit
   let emit chan v = perform (Emit (chan, v))
+
+  effect GetContext: unit -> ((unit -> unit) -> unit)
+  let get_context () = perform (GetContext ())
 
   let q = Queue.create ()
   let enqueue t = Queue.push t q
@@ -144,7 +148,7 @@ module Async : ASYNC = struct
        let chan = channel () in
        let count = ref n in
        let thunks = Array.map (fun thunk -> (fun () -> thunk (); count := !count - 1)) thunks in
-       let handle thunk () =
+       let rec handle thunk () =
          try thunk () with
          | effect (Await p) k ->
            let _ = async (fun () ->
@@ -162,32 +166,13 @@ module Async : ASYNC = struct
             let _ = async (fun () ->
                let v = receive chan' in
                emit chan (fun () -> continue k v)) in ()
+         | effect (GetContext _) k ->
+           continue k (fun (thunk: unit -> unit) -> handle thunk ())
        in
-       println "spawn!";
        Array.iter (fun thunk -> handle thunk ()) thunks;
-       println "spawn done!";
        while (!count > 0) do
-         println "receive!";
          (receive chan) ();
        done;
-       println "interleaved done"
-end
-
-module Suspendable(T: SomeT) = struct
-  type t = T.t
-  effect Set: (t, unit) continuation option -> unit
-  let set k = perform (Set k)
-  effect Get: (t, unit) continuation option
-  let get () = perform Get
-
-  let state_handler action =
-    let state = ref None in
-    try action () with
-    | effect (Set contopt) k ->
-      state := contopt;
-      continue k ()
-    | effect Get k ->
-      continue k !state
 end
 
 (* Time models are monoids over some time representation *)
@@ -234,7 +219,7 @@ module Reactive = struct
 
   let rec eat f stream =
     match Async.await stream with
-    | RCons (hd, tl) -> (f hd); eat f tl
+    | RCons (hd, tl) -> println "eat"; (f hd); eat f tl
     | RNil -> ()
 end
 
@@ -243,6 +228,58 @@ module TestInterleaved = struct
   let streams = [|liftArray [|"1";"2";"3";"4"|];
                   liftArray [|"a";"b";"c";"d"|];
                   liftArray [|"H";"I";"J";"K"|]|]
+
+  module type SLOT = sig
+    type t
+    effect Shout: t -> unit
+    val shout: t -> unit
+  end
+
+  module Slot(T: SomeT): (SLOT with type t = T.t) = struct
+    type t = T.t
+    effect Shout: t -> unit
+    let shout x = perform (Shout x)
+  end
+
+  (* (\* decorative solution *\)
+   * module SuspendableSlot(S: SLOT): (SLOT with type t = (unit -> unit) * S.t) =
+   * struct
+   *   (\* Offer the resumption to the outer context *\)
+   *   type t = (unit -> unit) * S.t
+   *   effect Shout: t -> unit
+   *   let shout x = perform (Shout x)
+   *   let suspendable thunk =
+   *     try thunk () with
+   *     | effect (S.Shout x) k ->
+   *       let resume () = continue k () in
+   *       shout (resume, x)
+   * end *)
+
+  module type SUSPEND = sig
+    val resume: unit -> unit
+    val suspendable: (unit -> unit) -> unit
+  end
+
+  (* stateful solution *)
+  module SuspendSlot(S: SLOT): SUSPEND =
+  struct
+    let state: (unit -> unit) option ref = ref None
+
+    let resume () =
+      match !state with
+      | None -> failwith "resume called with no suspension"
+      | Some thunk -> state := None; thunk ()
+
+    let suspendable thunk =
+      let context = Async.get_context () in
+      try thunk () with
+      | effect (S.Shout x) k ->
+        println "in suspendable";
+        let resume () = context (continue k) in
+        state := Some resume;
+        S.shout x
+  end
+
 
   effect Shout: (int * string) -> unit
   let shout i s = perform (Shout (i,s))
@@ -259,7 +296,6 @@ module TestInterleaved = struct
     | x -> (fun _ -> x)
     | effect Get k -> (fun (st: int) -> continue k st st)
     | effect (Set x) k -> (fun _ -> continue k () x)
-
 
   (* If interleaved works correctly, then the outputs should have a consecutive line numbering,
      starting from 1 and incremented by 1 each line.*)
@@ -279,56 +315,93 @@ module TestInterleaved = struct
     Async.run (fun () ->
         (with_state body 0))
 
-  (* Additionally test the capability to suspend strands TODO: fix bug *)
+  module type TSLOT = SLOT with type t = string
+
   let testSuspendable () =
-    let thunks = Array.mapi (fun i stream () -> eat (shout i) stream) streams in
-    let module S2 = Suspendable(struct type t = unit end) in
-    let suspendable thunk = begin
-      println "suspendable";
-      try thunk () with
-      | effect (Shout p) k ->
-        S2.set (Some k);
-        println "forwarding shout";
-        perform (Shout p); (* BUG: somehow, we manage resume into the line above, should be line after *)
-        println "forwarding resumed";
-        match S2.get ()  with
-        | Some k' -> println "continue"; S2.set None; continue k' ()
-        | None -> println "stashed"; ()
-    end in
-    let old = Array.get thunks 2 in
-    let _ = Array.set thunks 2 (fun () -> suspendable old) in
-    let stash = ref None in
+    let module S0 = (Slot(struct type t = string end): TSLOT) in
+    let module S1 = (Slot(struct type t = string end): TSLOT) in
+    let module S2 = (Slot(struct type t = string end): TSLOT) in
+    let module Suspend = SuspendSlot(S2) in
+    let slots: (module TSLOT) array = [|(module S0);(module S1);(module S2)|] in
+    let thunks = Array.mapi (fun i stream ->
+        let module S = (val Array.get slots i) in
+        let iter = (fun () -> eat (S.shout) stream) in
+        if (i = 2) then
+          (fun () -> Suspend.suspendable iter)
+        else iter) streams in
     let state = ref 0 in
-    let body () =
-      begin
-        try Async.interleaved thunks with
-        | effect (Shout (i,s)) k ->
-          print_string "shout!"; print_int i; print_newline ();
-          if i = 2 && !state == 0 then begin
-            println "stashing strand 2";
-            state := 1;
-            stash := S2.get ();
-            S2.set None
-          end
-          else ();
-          set (get () + 1);
-          print_int (get ());
-          print_string ": ";
-          println s;
-          if (get ()) > 6 && !state == 1 then begin
-            println "reviving strand 2";
-            let (Some cont) = !stash in
-            stash := None;
-            S2.set (Some cont);
-            continue cont ();
-            println "and continuing immediately";
-          end
-          else ();
-          continue k ()
-      end
+    let handle_shouts thunk = (* with_h (Array.to_list (Array.mapi (fun i (slot : (module TSLOT)) ->
+         * let module S = (val slot) in
+         * println "'sup";
+         * (fun thunk ->
+         *    println "momma";
+         *    try thunk () with
+         *    | effect (S.Shout s) k ->
+         *      println (Printf.sprintf "shout!%d" i);
+         *      (\* if (i == 2 && !state == 0) then state := 1 else ();
+         *         * set (get () + 1);
+         *         * print_int (get ());
+         *         * print_string ": ";
+         *         * println s;
+         *         * if (get ()) > 6 && !state == 1 then begin
+         *         *   state := 2;
+         *         *   println "reviving strand 2";
+         *         *   Suspend.resume ();
+         *         *   println "and continuing immediately";
+         *         * end
+         *         * else (); *\)
+                               *      continue k ())) slots)) *)
+      try thunk () with
+      | effect (S0.Shout v) k ->
+        println "shout0";
+        set (get () + 1);
+        print_int (get ());
+        print_string ": ";
+        println v;
+        if (get ()) > 6 && !state == 1 then begin
+          state := 2;
+          println "reviving strand 2";
+          Suspend.resume ();
+          println "and continuing immediately";
+        end
+        else ();
+        continue k ()
+      | effect (S1.Shout v) k ->
+        println "shout1";
+        set (get () + 1);
+        print_int (get ());
+        print_string ": ";
+        println v;
+        if (get ()) > 6 && !state == 1 then begin
+          state := 2;
+          println "reviving strand 2";
+          Suspend.resume ();
+          println "and continuing immediately";
+        end
+        else ();
+        continue k ()
+      | effect (S2.Shout v) k ->
+        println "shout2";
+        if (!state == 0) then state := 1 else ();
+        set (get () + 1);
+        print_int (get ());
+        print_string ": ";
+        println v;
+        if (get ()) > 6 && !state == 1 then begin
+          state := 2;
+          println "reviving strand 2";
+          Suspend.resume ();
+          println "and continuing immediately";
+        end
+        else ();
+        continue k ()
+
+
     in
-    Async.run (fun () ->
-        S2.state_handler (fun () -> (with_state body 0)))
+    let body () = handle_shouts (fun () -> Async.interleaved thunks) in
+    Async.run (fun () -> (with_state body 0))
+
+  (* let _ = testSuspendable () *)
 end
 
 
