@@ -8,6 +8,10 @@ let with_h hs action =
   let comp h thnk = (fun () -> (h thnk)) in
   List.fold_right comp hs action
 
+let with_ha hs action =
+  let comp h thnk = (fun () -> (h thnk)) in
+  Array.fold_right comp hs action
+
 module DelimCont = struct
   effect Shift: (('a -> unit) -> unit) -> 'a
   let shift f = perform (Shift f)
@@ -147,7 +151,6 @@ module Async : ASYNC = struct
     let n = Array.length thunks in
     match n with
     | 0 -> ()
-    | 1 -> (Array.get thunks 0) ()
     | _ ->
        let chan = channel () in
        let count = ref n in
@@ -164,17 +167,26 @@ module Async : ASYNC = struct
                in ())
            in continue k v
          | effect Yield k ->
-            let _ = async (fun () ->
-               let _ = yield () in
-               emit chan (fun () -> continue k ())) in ()
+           let _ = DelimCont.shift (fun cb ->
+               let _ = async (fun () ->
+                   let _ = yield () in
+                   emit chan (fun () -> cb ()))
+               in ())
+           in continue k ()
          | effect (Emit x) k ->
-            let _ = async (fun () ->
-               perform (Emit x);
-               emit chan (fun () -> continue k ())) in ()
+           let _ = DelimCont.shift (fun cb ->
+               let _ = async (fun () ->
+                   perform (Emit x);
+                   emit chan (fun () -> cb ()))
+               in ())
+           in continue k ()
          | effect (Receive chan') k ->
-            let _ = async (fun () ->
-               let v = receive chan' in
-               emit chan (fun () -> continue k v)) in ()
+           let v = DelimCont.shift (fun cb ->
+               let _ = async (fun () ->
+                   let v = receive chan' in
+                   emit chan (fun () -> cb v))
+               in ())
+           in continue k v
        in
        Array.iter (fun thunk ->
            DelimCont.reset (fun () ->
@@ -294,18 +306,13 @@ module TestInterleaved = struct
     let suspendable thunk =
       try thunk () with
       | effect (S.Shout x) k ->
-        println "in suspendable";
         S.shout x;
         match !state with
-        | Run -> println "continue normally"; continue k ()
+        | Run -> continue k ()
         | Pause ->
-          println "pause";
-          let _: unit = DelimCont.shift (fun cb ->
-              println "suspending";
-              cont := Some cb) in
+          let _: unit = DelimCont.shift (fun cb -> cont := Some cb) in
           continue k ()
   end
-
 
   effect Shout: (int * string) -> unit
   let shout i s = perform (Shout (i,s))
@@ -356,76 +363,32 @@ module TestInterleaved = struct
           (fun () -> Suspend.suspendable iter)
         else iter) streams in
     let state = ref 0 in
-    let handle_shouts thunk = (* with_h (Array.to_list (Array.mapi (fun i (slot : (module TSLOT)) ->
-         * let module S = (val slot) in
-         * (fun thunk ->
-         *    println "momma";
-         *    try thunk () with
-         *    | effect (S.Shout s) k ->
-         *      println (Printf.sprintf "shout!%d" i);
-         *      if (i == 2 && !state == 0) then state := 1 else ();
-         *      set (get () + 1);
-         *      print_int (get ());
-         *      print_string ": ";
-         *      println s;
-         *      if (get ()) > 6 && !state == 1 then begin
-         *        state := 2;
-         *        println "reviving strand 2";
-         *        Suspend.resume ();
-         *        println "and continuing immediately";
-         *      end
-         *      else ();
-         *      continue k ())) slots)) *)
-      try thunk () with
-      | effect (S0.Shout v) k ->
-        println "shout0";
-        set (get () + 1);
-        print_int (get ());
-        print_string ": ";
-        println v;
-        if (get ()) > 6 && !state == 1 then begin
-          state := 2;
-          println "reviving strand 2";
-          Suspend.play ();
-          println "and continuing immediately";
-        end
-        else ();
-        continue k ()
-      | effect (S1.Shout v) k ->
-        println "shout1";
-        set (get () + 1);
-        print_int (get ());
-        print_string ": ";
-        println v;
-        if (get ()) > 6 && !state == 1 then begin
-          state := 2;
-          println "reviving strand 2";
-          Suspend.play ();
-          println "and continuing immediately";
-        end
-        else ();
-        continue k ()
-      | effect (S2.Shout v) k ->
-        println "shout2";
-        if (!state == 0) then begin
-          state := 1;
-          Suspend.pause ()
-        end
-        else ();
-        set (get () + 1);
-        print_int (get ());
-        print_string ": ";
-        println v;
-        if (get ()) > 6 && !state == 1 then begin
-          state := 2;
-          println "reviving strand 2";
-          Suspend.play ();
-          println "and continuing immediately";
-        end
-        else ();
-        continue k ()
+    let handle_shouts = (Array.mapi (fun i (slot : (module TSLOT)) ->
+        let module S = (val slot) in
+        (fun thunk ->
+           try thunk () with
+           | effect (S.Shout s) k ->
+             println (Printf.sprintf "shout!%d" i);
+             if (i == 2 && !state == 0) then begin
+               println "suspending strand 2";
+               state := 1;
+               Suspend.pause ()
+             end
+             else ();
+             set (get () + 1);
+             print_int (get ());
+             print_string ": ";
+             println s;
+             if (get ()) > 8 && !state == 1 then begin
+               state := 2;
+               println "reviving strand 2";
+               Suspend.play ();
+               println "and continuing immediately";
+             end
+             else ();
+             continue k ())) slots)
     in
-    let body () = handle_shouts (fun () -> Async.interleaved thunks) in
+    let body = with_ha handle_shouts (fun () -> Async.interleaved thunks) in
     Async.run (fun () -> (with_state body 0))
 
   let _ = testSuspendable ()
