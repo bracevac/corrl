@@ -1,6 +1,12 @@
-EXE := main.native main.byte
+EXE := main.native main.byte 
 
-all: $(EXE)
+TEST := $(patsubst %.ml,%.native,$(wildcard test*.ml)) $(patsubst %.ml,%.byte,$(wildcard test*.ml))
+
+
+all: $(EXE) $(TEST) 
+
+test%.byte: test%.ml
+	ocamlbuild -cflag -g -lflag -g -pkg unix $@
 
 %.native: %.ml
 	ocamlbuild -cflag -g -pkg unix $@
