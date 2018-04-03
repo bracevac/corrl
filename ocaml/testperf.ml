@@ -1,9 +1,5 @@
-open Utility
-open Handlers
-open Data
-open Evt
-open Evt.Time
-open Reactive
+open Prelude
+open Slot
 open Main
 
 (* Stream size *)

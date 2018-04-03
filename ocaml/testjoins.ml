@@ -1,7 +1,4 @@
-open Data
-open Evt
-open Evt.Time
-open Reactive
+open Prelude
 open Main
 
 let testStreams = begin
