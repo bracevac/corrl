@@ -3,6 +3,29 @@
 // by Nicolas Wu, Tom Schrijvers, and Ralf Hinze
 // --------------------------------------------------------------
 
+//effect format {
+//  fun fmt(f: a -> string): string
+//}
+
+effect delimcont {
+  fun shift<a,b>(f: a -> b): b
+}
+
+fun i2s(x: int): string { "0" }
+
+fun d2s(x: double): string { "0.0" }
+
+val reset = handler {
+  shift(f) -> f(resume)
+}
+
+fun fmt(f) {
+  shift(fun(k){ return fun(x){ k(f(x))}})
+}
+
+
+val myprintftest = reset { join([fmt(i2s),fmt(d2s)]) } 
+
 effect nondet {
   flip() : bool;
   fail() : a
