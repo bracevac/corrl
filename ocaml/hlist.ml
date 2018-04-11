@@ -119,6 +119,28 @@ module HListMap = struct
   let thrice = s (s (s z))
 end
 
+module HListFoldr = struct
+  let z: type a. unit hlist -> unit hlist -> a -> a = (fun _ _ x -> x)
+  let s (type a) (type b) (type c) (type d)
+        (n: a hlist -> b hlist -> c -> c)
+        (fs: ((d -> c -> c) * a) hlist)
+        (hs: (d * b) hlist)
+        (c: c): c =
+    match fs with
+    | HCons (f, fs') ->
+       match hs with
+         HCons (x, hs') ->
+         let rs = n fs' hs' c in
+         f x rs
+
+  let foldr n fs hs c = n fs hs c
+
+  (* tests *)
+  let once = s z
+  let twice = s (s z)
+  let thrice = s (s (s z))
+end
+
 (* Position-dependent definitions *)
 module type JOINCARTESIAN = sig
   include JOIN
