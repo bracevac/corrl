@@ -4,6 +4,9 @@ type _ hlist =
   | HNil : unit hlist
   | HCons : ('a * 'b hlist) -> ('a * 'b) hlist
 
+let rec hlength: type a. a hlist -> int = function
+  | HNil -> 0
+  | HCons (_, hs) -> 1 + (hlength hs)
 
 (* emulate the type constructors in our framework *)
 type 'a r = 'a list
@@ -19,6 +22,7 @@ let tparam_of: 'a r typ -> 'a typ = (fun _ -> Typ)
 module type SLOT = sig
   type t
   effect Push: t -> unit
+  val memory: t list
 end
 type 'a slot = (module SLOT with type t = 'a)
 
@@ -26,6 +30,7 @@ let mkSlot (type s) (t: s typ) =
   (module struct
      type t = s
      effect Push: t -> unit
+     let memory = []
    end: (SLOT with type t = s))
 
 (* Implements a relation among phantom types of hlists *)
@@ -42,7 +47,7 @@ end
 module type JOIN = sig
   type index
   type slots
-  (* You can only construct a JOIN if you can prove that the index and slots are in this relation:  *)
+  (* You can construct a JOIN only if you can prove that the index and slots are in this relation:  *)
   val p_is_wrapped: (index, slots) Hlist_Match_Slot_Evt.proof
   (* Expose the slots in a hlist to enable position-dependent and type safe code generation. *)
   val hlist: slots hlist
@@ -71,6 +76,7 @@ let s (type a) (type b) n k x = n (fun (v: (a,b) join) ->
                                     k j)
 let join n = n (fun x -> x)
 
+(* TODO: it is said that there are no universal numerals. investigate: could we do it we GADT peano numbers? *)
 
 (* tests *)
 let zero  = join z                    (* JOIN with type index = unit and type slots = unit) *)
@@ -85,4 +91,47 @@ Error: This function has type
        (module JOIN with type index = 'a * unit and type slots =
         'a evt slot * unit)
      It is applied to too many arguments; maybe you forgot a `;'.
-*)
+ *)
+
+(* Polyvariadic hlist map: (a1 -> b1 * ... * an -> bn) hlist -> (a1 * ... * an) hlist -> (b1 * ... * bn) hlist  *)
+module HListMap = struct
+  let z: unit hlist -> unit hlist -> unit hlist =
+    function
+    | HNil -> (function
+               | HNil -> HNil)
+
+  let s (type a) (type b) (type c) (type d) (type e)
+        (n: a hlist -> b hlist -> c hlist)
+        (fs: ((d -> e) * a) hlist)
+        (hs: (d * b) hlist): (e * c) hlist =
+    match fs with
+    | HCons (f, fs') ->
+       match hs with
+         HCons (x, hs') ->
+         let rs = n fs' hs' in
+         HCons (f x, rs)
+
+  let map n fs hs = n fs hs
+
+  (* tests *)
+  let once = s z
+  let twice = s (s z)
+  let thrice = s (s (s z))
+end
+
+(* Position-dependent definitions *)
+module type JOINCARTESIAN = sig
+  include JOIN
+
+
+
+end
+type ('a, 'b) join_cartesian = (module JOINCARTESIAN with type index = 'a and type slots = 'b)
+
+module JoinCartesian(J: JOIN): (JOINCARTESIAN with type index = J.index and type slots = J.slots) =
+  struct
+    include J
+
+
+
+  end
