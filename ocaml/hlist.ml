@@ -31,7 +31,7 @@ let mkSlot (type s) (t: s typ) =
 (* Implements a relation among phantom types of hlists *)
 module Hlist_Match_Slot_Evt = struct
   (* (t,u) proof iff t and u are hlist phantom types (i.e. nested tuple types)
-     with (1) same length and (2) u_i = t_i evt slot, i.e., u is type constructor (_ evt slot) applied to u elementwise.   *)
+     with (1) same length and (2) u_i = t_i evt slot, i.e., u is type constructor (_ evt slot) applied to t elementwise.   *)
   type (_, _) proof =
     | Base: (unit, unit) proof
     | Step: ('a typ * 'a evt slot typ * ('b, 'c) proof) -> (('a * 'b), ('a evt slot * 'c)) proof
@@ -60,17 +60,15 @@ let mkJoin (type i) (type s) (p: (i,s) Hlist_Match_Slot_Evt.proof) (hl: s hlist)
 (* Polyvariadic join construction, an application of the techniques in http://okmij.org/ftp/Computation/extra-polymorphism.html#poly-var,
    and Daniel Fridlender and Mia Indrika: Do We Need Dependent Types? J. Functional Programming, 2000. *)
 let z k = k (mkJoin Hlist_Match_Slot_Evt.Base HNil)
-let s (type a) (type b)
-      n k x
-  = n (fun (v: (a,b) join) ->
-        let module J = (val v) in
-        let element_typ = (tparam_of (witness x)) in
-        let slot = (mkSlot (evt_typ element_typ)) in
-        let slot_typ = witness slot in
-        let proof = Hlist_Match_Slot_Evt.Step (element_typ, slot_typ, J.p_is_wrapped) in
-        let hlist = HCons (slot, J.hlist) in
-        let j = mkJoin proof hlist in
-        k j)
+let s (type a) (type b) n k x = n (fun (v: (a,b) join) ->
+                                    let module J = (val v) in
+                                    let element_typ = (tparam_of (witness x)) in
+                                    let slot = (mkSlot (evt_typ element_typ)) in
+                                    let slot_typ = witness slot in
+                                    let proof = Hlist_Match_Slot_Evt.Step (element_typ, slot_typ, J.p_is_wrapped) in
+                                    let hlist = HCons (slot, J.hlist) in
+                                    let j = mkJoin proof hlist in
+                                    k j)
 let join n = n (fun x -> x)
 
 
