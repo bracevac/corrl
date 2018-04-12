@@ -121,11 +121,11 @@ end
 
 module HListFoldr = struct
   let z: type a. unit hlist -> unit hlist -> a -> a = (fun _ _ x -> x)
-  let s (type a) (type b) (type c) (type d)
-        (n: a hlist -> b hlist -> c -> c)
-        (fs: ((d -> c -> c) * a) hlist)
-        (hs: (d * b) hlist)
-        (c: c): c =
+  let s (type a) (type b) (type c) (type d) (type e) (type f)
+        (n: a hlist -> b hlist -> c -> d)
+        (fs: ((e -> d -> f) * a) hlist)
+        (hs: (e * b) hlist)
+        (c: c): f =
     match fs with
     | HCons (f, fs') ->
        match hs with
@@ -141,7 +141,12 @@ module HListFoldr = struct
   let thrice = s (s (s z))
 end
 
-(* Position-dependent definitions *)
+(* Polyvariadic, position-dependent definitions *)
+module HListZipper = struct
+
+end
+
+
 module type JOINCARTESIAN = sig
   include JOIN
 
