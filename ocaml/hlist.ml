@@ -133,7 +133,7 @@ module HListFoldr = struct
          let rs = n fs' hs' c in
          f x rs
 
-  let foldr n fs hs c = n fs hs c
+  let foldr n fs hs = n fs hs
 
   (* tests *)
   let once = s z
@@ -157,3 +157,8 @@ module JoinCartesian(J: JOIN): (JOINCARTESIAN with type index = J.index and type
 
 
   end
+
+
+(* next step: cartesian impl *)
+(* DSL *)
+(* extensions *)
