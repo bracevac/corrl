@@ -3,32 +3,9 @@
 // by Nicolas Wu, Tom Schrijvers, and Ralf Hinze
 // --------------------------------------------------------------
 
-//effect format {
-//  fun fmt(f: a -> string): string
-//}
-
-effect delimcont {
-  fun shift<a,b>(f: a -> b): b
-}
-
-fun i2s(x: int): string { "0" }
-
-fun d2s(x: double): string { "0.0" }
-
-val reset = handler {
-  shift(f) -> f(resume)
-}
-
-fun fmt(f) {
-  shift(fun(k){ return fun(x){ k(f(x))}})
-}
-
-
-val myprintftest = reset { join([fmt(i2s),fmt(d2s)]) } 
-
 effect nondet {
-  flip() : bool;
-  fail() : a
+  fun flip() : bool
+  fun fail() : a
 }
 
 fun knapsack(w : int, vs : list<int> ) : <nondet,div> list<int> {
@@ -66,14 +43,14 @@ fun test1() {
 // --------------------------------------------------------------
 
 effect state<s> {
-  get()    : s;
-  put(i:s) : ()
+  fun get()    : s
+  fun put(i:s) : ()
 }
 
 val state = handler(i) {
   return x -> (i,x)
   get()    -> resume(i,i)
-  put(j)   -> resume(j,())
+  put(j)   -> resume((),j)
 }
 
 fun incr(i = 1) : state<int> () {
@@ -117,7 +94,7 @@ fun test3() {
 // --------------------------------------------------------------
 
 effect cutfail {
-  cutfail() : a
+  fun cutfail() : a
 }
 
 fun cut() {
@@ -134,7 +111,7 @@ val hcutfail = handler{
 val collect = handler(q=fail) {
   return x -> if (flip()) then x else q()
   fail     -> q()
-  flip()   -> resume({resume(q,False)}, True)  
+  flip()   -> resume(True,{resume(False,q)})  
 }
 
 fun call(p) { 
@@ -154,7 +131,7 @@ fun test4() {
 // --------------------------------------------------------------
 
 effect symbol {
-  symbol(s : string) : string
+  fun symbol(s : string) : string
 }
 
 val parse = handler(cs:string) {
@@ -166,19 +143,21 @@ val parse = handler(cs:string) {
 }
 
 
+val digits = list(0,9).map(show)
+
 fun digit() : <nondet,symbol> string {
-  symbol(select(list(0,9).map(show)))
+  symbol(select(digits))
 }
 
 fun choice(p1,p2) {
   if (flip()) then p1() else p2()
 }
 
-fun many(p) {
+fun many(p : () -> <nondet,div|e> a) : <nondet,div|e> list<a> {
   choice{ many1(p) }{ [] }
 }
 
-fun many1(p) {
+fun many1(p : () -> <nondet,div|e> a) : <nondet,div|e> list<a> {
   Cons(p(),many(p))
 }
 
@@ -281,6 +260,14 @@ fun main() {
   ,test2().show
   ,test3().show
   ,test4().show
-  ,test5().show
+  // ,test5().show
   ].join("\n").println
+}
+
+
+fun mymap( xs, f ) {
+  match(xs) {
+    Nil -> Nil
+    Cons(x,xx) -> Cons(f(x),mymap(xx,f))
+  }
 }

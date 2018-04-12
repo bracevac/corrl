@@ -38,6 +38,7 @@ import Common.Syntax
 
 import Core.Core
 import Core.Pretty ()
+import Core.CoreVar
 
 type CommentDoc   = Doc
 type ConditionDoc = Doc
@@ -57,19 +58,19 @@ externalNames
 -- Generate JavaScript code from System-F core language
 --------------------------------------------------------------------------
 
-javascriptFromCore :: Maybe (Name,Bool) -> Core -> Doc
-javascriptFromCore mbMain core
-  = runAsm (Env moduleName penv externalNames False) (genModule mbMain core)
+javascriptFromCore :: Int -> Maybe (Name,Bool) -> Core -> Doc
+javascriptFromCore maxStructFields mbMain core
+  = runAsm (Env moduleName penv externalNames False) (genModule maxStructFields mbMain core)
   where
     moduleName = coreProgName core
     penv       = Pretty.defaultEnv{ Pretty.context = moduleName, Pretty.fullNames = False }
 
-genModule :: Maybe (Name,Bool) -> Core -> Asm Doc
-genModule mbMain core
+genModule :: Int -> Maybe (Name,Bool) -> Core -> Asm Doc
+genModule maxStructFields mbMain core
   =  do let externs = vcat (concatMap includeExternal (coreProgExternals core))
             (tagDefs,defs) = partition isTagDef (coreProgDefs core)
         decls0 <- genGroups tagDefs
-        decls1 <- genTypeDefs (coreProgTypeDefs core)
+        decls1 <- genTypeDefs maxStructFields (coreProgTypeDefs core)
         decls2 <- genGroups defs
         let imports = map importName (coreProgImports core)
             (mainEntry,mainImports) = case mbMain of
@@ -77,8 +78,8 @@ genModule mbMain core
                           Just (name,isAsync)
                             -> (if isAsync
                                  then (text " " <-> text "// main entry:" <->
-                                       text "$std_async.async_handle" <> parens (ppName (unqualify name)) <> semi
-                                      ,[(text "./std_async", text "$std_async")])
+                                       text "$std_async_.async_handle" <> parens (ppName (unqualify name)) <> semi
+                                      ,[(text "./std_async", text "$std_async_")])
                                  else (text " " <-> text "// main entry:" <->
                                        ppName (unqualify name) <> text "($std_core.id);" -- pass id for possible cps translated main
                                       ,[]))
@@ -142,7 +143,7 @@ includeExternal (ExternalInclude includes range)
                     Just s -> s
                     Nothing -> case lookup Default includes of
                                  Just s -> s
-                                 Nothing -> failure ("javascript backend does not support external inline at " ++ show range)
+                                 Nothing -> ""
     in [align $ vcat $! map text (lines content)]
 includeExternal _  = []
 
@@ -223,22 +224,22 @@ tryFunDef name comment expr
 -- Generate value constructors for each defined type
 ---------------------------------------------------------------------------------
 
-genTypeDefs :: TypeDefGroups -> Asm Doc
-genTypeDefs groups
-  = do docs <- mapM (genTypeDefGroup) groups
+genTypeDefs :: Int -> TypeDefGroups -> Asm Doc
+genTypeDefs maxStructFields groups
+  = do docs <- mapM (genTypeDefGroup maxStructFields) groups
        return (vcat docs)
 
-genTypeDefGroup :: TypeDefGroup -> Asm Doc
-genTypeDefGroup  (TypeDefGroup tds)
-  = do docs <- mapM (genTypeDef ) tds
+genTypeDefGroup :: Int -> TypeDefGroup -> Asm Doc
+genTypeDefGroup maxStructFields (TypeDefGroup tds)
+  = do docs <- mapM (genTypeDef maxStructFields) tds
        return (vcat docs)
 
-genTypeDef :: TypeDef -> Asm Doc
-genTypeDef (Synonym {})
+genTypeDef :: Int -> TypeDef -> Asm Doc
+genTypeDef maxStructFields (Synonym {})
   = return empty
-genTypeDef (Data info _ _ isExtend)
+genTypeDef maxStructFields (Data info _ _ isExtend)
   = do modName <- getModule
-       let (dataRepr, conReprs) = getDataRepr (-1) {- maxStructFields -} info
+       let (dataRepr, conReprs) = getDataRepr maxStructFields info
        docs <- mapM ( \(c,repr)  ->
           do let args = map ppName (map fst (conInfoParams c))
              name <- genName (conInfoName c)
@@ -516,13 +517,14 @@ genMatch result scrutinees branches
     getSubstitutions :: Doc -> Pattern -> [(TName, Doc)]
     getSubstitutions nameDoc pat
           = case pat of
-              PatCon tn args repr _ _ info
+              PatCon tn args repr _ _ _ info
                 -> concatMap (\(pat',fn)-> getSubstitutions
                                              (nameDoc <> (if (getName tn == nameOptional || isConIso repr) then empty else (text "."  <> fn)))
                                              pat'
                             ) (zip args (map (ppName . fst) (conInfoParams info)) )
               PatVar tn pat'      -> (tn, nameDoc):(getSubstitutions nameDoc pat')
               PatWild             -> []
+              PatLit lit          -> []
 
     genGuard  :: Bool -> Result -> Guard -> Asm Doc
     genGuard lastBranchLastGuard result (Guard t expr)
@@ -542,7 +544,9 @@ genMatch result scrutinees branches
               PatWild ->  []
               PatVar _ pat
                 -> genTest modName (scrutinee,pat)
-              PatCon tn fields repr _ _ info
+              PatLit lit
+                -> [scrutinee <+> text "===" <+> ppLit lit]
+              PatCon tn fields repr _ _ _ info
                 | getName tn == nameTrue
                 -> [scrutinee]
                 | getName tn == nameFalse
@@ -615,7 +619,9 @@ genExpr expr
      TypeLam _ e -> genExpr e
 
      -- handle not inlineable cases
-     App (TypeApp (Con name info) _) [arg]  | getName name == nameOptional
+     App (TypeApp (Con name repr) _) [arg]  | getName name == nameOptional || isConIso repr
+       -> genExpr arg
+     App (Con _ repr) [arg]  | isConIso repr
        -> genExpr arg
      App f args
         -- | isFunExpr f
@@ -722,6 +728,7 @@ isPat :: Bool -> Pattern -> Bool
 isPat b q
   = case q of
       PatWild     -> False
+      PatLit _    -> False
       PatVar _ q' -> isPat b q'
       PatCon {}   -> getName (patConName q) == if b then nameTrue else nameFalse
 
@@ -733,7 +740,9 @@ genInline expr
       _  | isPureExpr expr -> genPure expr
       TypeLam _ e -> genInline e
       TypeApp e _ -> genInline e
-      App (TypeApp (Con name info) _) [arg]  | getName name == nameOptional
+      App (TypeApp (Con name repr) _) [arg]  | getName name == nameOptional || isConIso repr
+        -> genInline arg
+      App (Con _ repr) [arg]  | isConIso repr
         -> genInline arg
       App f args
         -> do argDocs <- mapM genInline (trimOptionalArgs args)
@@ -802,8 +811,10 @@ getFormat :: TName -> [(Target,String)] -> String
 getFormat tname formats
   = case lookup JS formats of
       Nothing -> case lookup Default formats of
-         Nothing -> failure ("backend does not support external in " ++ show tname ++ ": " ++ show formats)
          Just s  -> s
+         Nothing -> -- failure ("backend does not support external in " ++ show tname ++ ": " ++ show formats)
+                    trace( "warning: backend does not support external in " ++ show tname ) $
+                      ("__std_core._unsupported_external(\"" ++ (show tname) ++ "\")")
       Just s -> s
 
 genDefName :: TName -> Asm Doc

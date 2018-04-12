@@ -217,7 +217,12 @@ canonical p
 
 pdefSort
   = do (_,doc) <- dockeyword "fun" 
-       return (DefFun,doc)
+       monKind <- do { specialOp "**"; return PolyMon }
+                  <|>
+                  do { specialOp "*"; return AlwaysMon }
+                  <|>
+                  return NoMon
+       return (DefFun monKind,doc)
   <|>
     do (_,doc) <- dockeyword "val"
        return (DefVal,doc)
@@ -540,7 +545,10 @@ katom
   <|>
     do specialConId "H"
        return kindHeap
-  <|>
+ <|>
+    do specialConId "S"
+       return kindScope
+   <|>
     do specialConId "HX"
        return kindHandled
   <|>

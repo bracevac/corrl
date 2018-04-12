@@ -19,22 +19,20 @@ than arbitrary precision floating point numbers.
 
 If you add two regular 64-bit `:double` values you can quickly notice the imprecision
 due to decimal fractions that cannot be represented precisely. For example:
-
 ```
 > 0.1 + 0.2
 0.30000000000000004
 ```
 
-When we show the `0.1` to 20 digits of precision, we see that it is not precisely
-represented by a `:double`:
-
+This happens because the decimal `0.1` and `0.2` cannot be represented exactly
+by a `:double` which is encoded in base 2. For example, if we show `0.1` to 20 digits, we get:
 ```
 > 0.1.show(20)
 "0.10000000000000000555"
 ```
 
-If we convert this to a `:ddouble` we can see with more precision how 0.1 is
-represented by a `:double`:
+When we convert the constant `0.1` to a `:ddouble` we can see with even more precision how it is
+approximated:
 
 ```
 > 0.1.ddouble
@@ -42,7 +40,7 @@ represented by a `:double`:
 ```
 
 However, if we convert the number `0.1` directly to a `:ddouble` (instead of going through
-a `:double` constant), we get `0.1` (almost) exactly:
+a `:double` constant), we can represent `0.1` (almost) exactly:
 
 ```
 > ddouble("0.1")   // for convenience; using `ddouble-exp(1,-1)` is more efficient
@@ -51,11 +49,11 @@ a `:double` constant), we get `0.1` (almost) exactly:
 
 This is possible because a `:ddouble` uses two `:double`s to represent numbers; in this
 case the first (_hi_) double is (the inexact) `0.1` while the second one (_lo_) is the
-correction to that number. The `show-sum` function shows this internal pair of numbers:
+correction to that number. The `show-sum`  (or `show-hex`) function shows this internal pair of numbers:
 
 ```
-> ddouble("0.1").show-sum
-"0.10000000000000000555 + -5.5511151231257830103e-18"
+> ddouble("0.1").show-sum(20)
+"0.10000000000000000555 + -5.55111512312578301027e-18"
 
 > ddouble("0.1") + ddouble("0.2")
 0.3
@@ -68,7 +66,6 @@ not as well-defined as with a regular `:double` [@lin;@shewchuk;@Dekker].
 Nevertheless, using a `:ddouble` often prevents instability in practice over
 `:double` computations due to  rounding errors or combining very large and
 small numbers.
-
 
 Take the "thin triangle" problem for example [@Goldberg:float;@Kahan:triangle].
 The challenge is to compute
@@ -84,9 +81,9 @@ up to about the width of a doorway at the thickest point&rdquo;. Using various
 128-bit numbers we get:
 ````
 exact          : 3.14784204874900425235885265494550774498...e-16
-128-bit ddouble: 3.1478420487490042523588526549455e-16
-128-bit posit  : 3.147842048749004252358852654945507744\([39]{color:#88F}\)e-16
-128-bit ieee   : 3.\([63481490842332134725920516158057682878]{color:#88F}\)e-16
+128-bit ddouble: 3.147842048749004252358852654945\([47]{color:#F88}\)e-16
+128-bit posit  : 3.147842048749004252358852654945507744\([39]{color:#F88}\)e-16
+128-bit ieee   : 3.\([63481490842332134725920516158057682878]{color:#F88}\)e-16
 ````
 For this kind of example, a `:ddouble` has better precision than a
 regular 128-bit IEEE float since it can combine very large and
@@ -94,9 +91,9 @@ small values. (Kahan [@Kahan:triangle] shows how to rewrite the equations
 to avoid magnifying rounding errors -- in that case the result for
 IEEE 128-bit floats becomes:
 ````
-128-bit ieee x : 3.147842048749004252358852654945507\([92210]{color:#88F}\)e-16
+128-bit ieee x : 3.147842048749004252358852654945507\([92210]{color:#F88}\)e-16
 ````
-which also gives the required precision.)
+)
 
 The implementation is based closely on the [QD] C++ library [@Hida:qd;@Hida:qdlib],
 and assumes proper 64-bit IEEE `:double`s with correct rounding.
@@ -253,6 +250,9 @@ public val dd-pi2     = Ddouble(0x1.921FB54442D18p+0, 0x1.1A62633145C07p-54)
 public val dd-pi4     = Ddouble(0x1.921FB54442D18p-1, 0x1.1A62633145C07p-55)
 // QD:                         7.853981633974482790e-01,3.061616997868383018e-17)
 
+// &pi;/16
+private val dd-pi16 = Ddouble( 0x1.921FB54442D18p+1, 0x1.1A62633145C07p-53)
+
 // 3&pi;/4
 public val dd-pi34    = Ddouble(0x1.2D97C7F3321D2p+1, 0x1.A79394C9E8A0Bp-54)
 // QD:                          2.356194490192344837e+00,9.1848509936051484375e-17)  // QD is again one bit off
@@ -283,8 +283,11 @@ public val dd-euler  = Ddouble(0x1.2788CFC6FB619p-1, -0x1.6CB90701FBFABp-58) //0
 
 // The 'machine epsilon': this is not well-defined for a `:ddouble` in general since
 // the difference between 1.0 and the next representable `:ddouble` value is `dd-true-min`.
-// Instead, we take the square of `dbl-epsilon`, i.e. `0x1.0p-104`.
+// Instead, we take the square of `dbl-epsilon`, i.e. 2^-104^.
 public val dd-epsilon = Ddouble(0x1p-104,0.0)
+
+// 8*dd-epsilon
+private val dd-epsilon8 = Ddouble(0x1.0p-101, 0x0.0p+0)
 
 // The maximum representable `:ddouble`
 public val dd-max     = Ddouble( 0x1.FFFFFFFFFFFFFp+1023, 0x1.FFFFFFFFFFFFFp+969 )
@@ -307,6 +310,7 @@ public val dd-neginf  = Ddouble(neginf,0.0)
 // maximal precision in decimal digits of a `:ddouble`.
 public val dd-max-prec = 31
 
+private val dd-default-prec = -31
 
 /*------------------------------------------------------
    Compare etc.
@@ -580,7 +584,7 @@ public fun int( x : ddouble, nonfin : int = 0 ) : int {
 	if (!x.finite?) then nonfin else x.round.decimal.int
 }
 
-// Round a `:ddouble` to the nearest integer (rounding to the nearest even number in case of a tie).
+// Round a `:ddouble` to the nearest integer, rounding to the nearest even number in case of a tie.
 public fun round( x : ddouble ) : ddouble {
   val r = x.hi.round
   val diff = r - x.hi
@@ -608,15 +612,15 @@ public fun ceiling( x : ddouble ) : ddouble {
 }
 
 
-// Round to zero.
-public fun trunc( x : ddouble ) : ddouble {
+// Round towards zero.
+public fun truncate( x : ddouble ) : ddouble {
   if (x.neg?) then x.ceiling else x.floor
 }
 
 
-// The fraction of `x` such that `x.trunc + x.fraction == x`.
+// The fraction of `x` such that `x.truncate + x.fraction == x`.
 public fun fraction( x : ddouble ) : ddouble {
-  x - x.trunc
+  x - x.truncate
 }
 
 // The _floored_ fraction of `x`. This is always positive, such that `x.floor + x.ffraction == x`.
@@ -625,7 +629,8 @@ public fun ffraction( x : ddouble ) : ddouble {
 }
 
 
-// Round a `:ddouble` to a specified precision. Uses `round` if the precision is smaller or equal to zero.
+// Round a `:ddouble` to a specified precision.
+// Uses `round` if the precision is smaller or equal to zero.
 public fun round-to-prec( x : ddouble, prec : int  ) : ddouble {
   if (prec <= 0) then x.round
   elif (prec > dd-max-prec) then x
@@ -722,6 +727,8 @@ i.e. `x == x.show-hex.ddouble`.
 ```
 > 0.1.ddouble.show-hex
 "0x1.999999999999Ap-4 + 0x0.0p+0"
+> "0.1".ddouble.show-hex
+"0x1.999999999999Ap-4 + -0x1.999999999999Ap-58"
 > dd-pi.show-hex
 "0x1.921FB54442D18p+1 + 0x1.1A62633145C07p-53"
 > dd-max.show-hex
@@ -800,7 +807,6 @@ public fun show-sum( x : ddouble, prec : int = -17 ) : string {
 		else x.hi.show(prec) + " + " + x.lo.show(prec)
 }
 
-val dd-default-prec = -31
 
 
 /*------------------------------------------------------
@@ -1076,16 +1082,14 @@ public fun logaddexp2( x : ddouble, y : ddouble ) : ddouble {
   }
 }
 
-val eps8 = 8.ddouble * dd-epsilon
-
-// Return if two `:ddouble`s are nearly equal with respect to some `epsilon` (=`8.0*dd-epsilon`).
+// Return if two `:ddouble`s are nearly equal with respect to some `epsilon` (=`8*dd-epsilon`).
 // The epsilon is the nearest difference for numbers around 1.0. The routine automatically
 // scales the epsilon for larger and smaller numbers, and for numbers close to zero.
-public fun nearly-eq( x : ddouble, y : ddouble, epsilon : ddouble = eps8 ) : bool {
+public fun nearly-eq( x : ddouble, y : ddouble, epsilon : ddouble = dd-epsilon8 ) : bool {
   if (x == y) return True
   val diff = (x - y).abs
   if (x.zero? || y.zero? || diff < dd-min) {
-    // very close to zero, scale the epsilon for denormalized numbers
+    // very close to zero, scale the epsilon for subnormal numbers
     (two*diff < (epsilon * dd-min))
   }
   else {
@@ -1193,14 +1197,14 @@ public fun tan( rad : ddouble ) : ddouble {
   s / c
 }
 
-val dd-pi16 = Ddouble(1.963495408493620697e-01,7.654042494670957545e-18)
-
-
 // Calculate sine and cosine on an angle in radians.
 public fun sincos( rad : ddouble ) : (ddouble,ddouble) {
   // quick approximation for small values
   if (rad.hi.abs < 1.0e-11) then {
-    return (rad, one - 0.5.ddouble*sqr(rad))
+    // return (rad, one - 0.5.ddouble*sqr(rad))
+    val s = rad * (one - (rad.sqr / 3.ddouble))
+    val c = (one - s.sqr).sqrt
+    return (s,c)
   }
 
   /*
@@ -1210,16 +1214,27 @@ public fun sincos( rad : ddouble ) : (ddouble,ddouble) {
   Chebyshev series, we can compute very precisely.
   */
   // find a, b, and s.
+  /*
   val z  = (rad / dd-twopi).round
   val r  = rad - (dd-twopi * z)
 
   val qa : double = floor( (r.hi / dd-pi2.hi) + 0.5)
-  val a  = qa.trunc.int
+  val a  = qa.truncate.int
   val t  = r - (dd-pi2 * qa.ddouble)
   val qb : double = floor((t.hi / dd-pi16.hi) + 0.5)
-  val b  = qb.trunc.int
+  val b  = qb.truncate.int
 
   val s  = t - (dd-pi16 * qb.ddouble)
+  */
+  
+  val x1 = rad / dd-twopi
+  val x3 = x1 - x1.round
+  // s = x - a*pi/2 - b*pi/16
+  val x32 = x3 + x3
+  val x34 = x32 + x32 // 4.ddouble * x3
+  val a   = x34.int
+  val b   = (8.ddouble * (x34 - a.ddouble)).int
+  val s   = dd-pi * (x32 - ((8*a + b).ddouble / 16.ddouble))
   val s2 = s.sqr
 
   // Use the Chebyshev series for best precision.

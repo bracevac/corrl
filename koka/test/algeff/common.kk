@@ -43,7 +43,7 @@ fun test1() {
 // --------------------------------------------------------
 
 effect input {
-  getstr() : string
+  fun getstr() : string
 }
 
 fun hello() {
@@ -80,7 +80,7 @@ fun counter() {
 val state = handler(s) {
   return x -> (x,s)
   get()    -> resume(s,s)
-  put(s')  -> resume(s',())
+  put(s')  -> resume((),s')
 }
 
 fun test3() {
@@ -107,7 +107,7 @@ fun iterate(xs : list<a> ) : yield<a> () {
 fun foreach( f : a -> e bool, action : () -> <yield<a>|e> () ) : e () {
   handle(action) {
     return x -> ()
-    yield(x) -> if (incps1(f,x)) then resume(()) else ()
+    yield(x) -> if (f(x) /*incps1(f,x)*/) then resume(()) else ()
   }
 }
 
@@ -177,7 +177,22 @@ fun test7() {
 fun ask-age() {
   println("what is your name?")
   val name = readline()           // asynchronous!
-  println("hello " + name)
+  println("and you age?")
+  val age = readline()
+  println("hello " + name + ", you are " + age)
+}
+
+
+fun ask-age-err() {
+  catch {
+    println("what is your name?")
+    val name = readline()
+    raise("ouch!")
+    println("hello " + name)
+  }
+  fun(err) {
+    println("error: " + err )
+  }
 }
 
 

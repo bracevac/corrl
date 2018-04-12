@@ -104,25 +104,40 @@ function _double_show_fixed(d, fractionDigits) {
 /*------------------------------------------------
   Exceptions
 ------------------------------------------------*/
-function _Exception(message,info) {
+function _exn_capture_stack(exn) {
+  if ("captureStackTrace" in Error) {
+    Error.captureStackTrace(exn,_InfoException);  // best on Node.js
+  }
+  else {
+    exn.stack = (new Error()).stack; // in browsers
+  }
+  if (exn.stack==null) exn.stack = "";
+  // strip off leaf functions from the stack trace
+  exn.stack = exn.stack.replace(/\n\s*at (exn_exception|exception|(Object\.)?throw_1|Object\.error|exn_error_pattern|Object\.error_pattern|exn_error_range|Object\._vector_at)\b.*/g,"");
+} 
+
+function _InfoException(message,info) {
   this.name    = (info && info._tag ? info._tag : 'std/core/exception');
   this.message = message || "unknown error";
   this.info    = info || $Error;
-  if ("captureStackTrace" in Error) {
-    Error.captureStackTrace(this,_Exception);  // best on Node.js
-  }
-  else {
-    this.stack = (new Error()).stack; // in browsers
-  }
-  if (this.stack==null) this.stack = "";
-  // strip off leaf functions from the stack trace
-  this.stack = this.stack.replace(/\n\s*at (exn_exception|exception|(Object\.)?throw_1|Object\.error|exn_error_pattern|Object\.error_pattern|exn_error_range|Object\._vector_at)\b.*/g,"");
+  _exn_capture_stack(this);
 }
-_Exception.prototype = Object.create(Error.prototype);
-_Exception.prototype.constructor = _Exception;
+_InfoException.prototype = Object.create(Error.prototype);
+_InfoException.prototype.constructor = _InfoException;
+
+function _InfoFinalizeException(message,info) {
+  $std_core._FinalizeException.call(this,message);
+  this.name    = (info && info._tag ? info._tag : 'std/core/exception');
+  this.info    = info || $Error;
+  _exn_capture_stack(this);
+}
+_InfoFinalizeException.prototype = Object.create($std_core._FinalizeException.prototype);
+_InfoFinalizeException.prototype.constructor = _InfoFinalizeException;
+
 
 function exn_exception(msg,info) {
-  return new _Exception(msg,info);
+  if (info===Cancel) return new _InfoFinalizeException(msg,info)
+                else return new _InfoException(msg,info);
 }
 
 function exn_stacktrace( exn ) {
@@ -135,27 +150,41 @@ function exn_stacktrace( exn ) {
 }
 
 function exn_error_pattern(loc,def) {
-  throw new _Exception( loc + (def ? ": " + def : "") + ": pattern match failure", Pattern(loc,def));
+  throw new _InfoException( loc + (def ? ": " + def : "") + ": pattern match failure", Pattern(loc,def));
+}
+
+function _unsupported_external(msg) {
+  throw new _InfoException(msg, $Error);
 }
 
 function exn_error_range() {
-  throw new _Exception( "index out of bounds", Range );
+  throw new _InfoException( "index out of bounds", Range );
 }
 
 function exn_throw( exn ) {
   throw exn;
 }
 
+
 function exn_info( exn ) {
   //console.log("exn_info: " + exn.stack);
-  if (exn instanceof _Exception && exn.info != null) {
+  if (exn instanceof _InfoException && exn.info != null) {
+    return exn.info;
+  }
+  else if (exn instanceof _InfoFinalizeException && exn.info != null) {
     return exn.info;
   }
   else if (exn instanceof RangeError) {
     return Range;
   }
+  else if (exn instanceof AssertionError) {
+    return Assert;
+  }
+  else if (exn instanceof Error && typeof exn.code === "string" ) {
+    return System(exn.code);
+  }
   else {
-    return Error;
+    return $Error;
   }
 }
 
@@ -174,37 +203,6 @@ function exn_message( exn ) {
     msg = exn.toString();
   }
   return msg;
-}
-
-function _primcatch(action,handler,_k) {
-  if (_k!==undefined) {
-    // if in cps mode, use an effect handler
-    return hcatch(action,handler,_k);
-  }
-  else {
-    // otherwise we can catch normally
-    try {
-      return action();
-    }
-    catch(exn) {
-      return handler(exn)
-    }
-  }
-}
-
-function _primfinally(action,handler,_k) {
-  if (_k !== undefined) {
-    // if in cps, use an effect handler
-    return hfinally(action,handler,_k);
-  }
-  else {
-    try {
-      return action();
-    }
-    finally {
-      handler();
-    }
-  }
 }
 
 
@@ -307,14 +305,15 @@ function _export(mod,exp) {
 }
 
 /* assign here so inlined primitives are available in system.core itself */
-$std_core = { "_export": _export
+$std_core = _export($std_core, { 
+            "_export": _export
             // primitive operations emitted by the compiler
             , "_int32_multiply": _int32_multiply
             , "_int32_cmod": _int32_cmod
             , "_int32_cdiv": _int32_cdiv
             , "vlist": _vlist
             , "_vector_at": _vector_at
-            , "Yield": Yield
+            , "_unsupported_external": _unsupported_external
             // integer operations that will be inlined
             , "_int_string": _int_string
             , "_int_double": _int_double
@@ -340,7 +339,7 @@ $std_core = { "_export": _export
             , "_int_ge": _int_ge
             , "_int_lt": _int_lt
             , "_int_le": _int_le
-            }
+            });
 
 
 /*------------------------------------------------

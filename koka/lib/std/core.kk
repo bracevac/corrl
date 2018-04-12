@@ -22,9 +22,19 @@ infixr 20  (||)
 
 // prefix     (!), (-)
 
+
+
+extern include {
+  js file "core-handlers-inline.js" // must come first due to dependencies
+}
+
 extern include {
   cs file "core-inline.cs"
   js file "core-inline.js"
+}
+
+extern include {
+  cs file "core-handlers-inline.cs"
 }
 
 extern include {
@@ -33,10 +43,6 @@ extern include {
 
 extern include {
   js file "core-console-inline.js"
-}
-
-extern include {
-  js file "core-handlers-inline.js"
 }
 
 extern include {
@@ -59,7 +65,8 @@ type int
 // See also the [``std/text/string``](std_text_string.html) module.
 type string
 
-// A 64-bit IEEE 754 floating point value
+// A 64-bit IEEE 754 floating point value.
+// See also `std/num/double` for more operations on `:double`s.
 type double
 
 // An any type. Used for extern calls
@@ -118,6 +125,9 @@ alias st<h> = <read<h>, write<h>, alloc<h>>
 // The `:global` heap is a special heap constant to denote the global shared heap
 type global :: H
 
+// The `:global-scope` is a special type constant to denote the global scope
+type global-scope :: S
+
 // The `:net` effect signifies a function may access the network
 type net :: X
 
@@ -130,8 +140,14 @@ type ui :: X
 // The `:blocking` effect signifies that a function may block
 type blocking :: X
 
-// The `:io` effect is used for funs that perform arbitrary I/O operations.
-alias io = <exn,div,ndet,console,net,file,ui,st<global>>
+// The `:io-total` effect is used for functions that perform arbitrary I/O operations, but are terminating without raising exceptions.
+alias io-total = <ndet,console,net,file,ui,st<global>>
+
+// The `:io-noexn` effect is used for functions that perform arbitrary I/O operations, but raise no exceptions
+alias io-noexn = <div,io-total>
+
+// The `:io` effect is used for functions that perform arbitrary I/O operations.
+alias io = <exn,io-noexn>
 
 // ----------------------------------------------------------------------------
 // Injection
@@ -217,64 +233,102 @@ extern error-pattern(location : string, definition : string) : exn a {
 }
 
 // Execute a `hndler` no matter what exception was raised in `action`.
-// Use of `on-exit` is preferred (which has its arguments swapped).
 extern finally : forall<e,a> (action: () -> e a, hndl: () -> e ()) -> e a  {
-  cs inline "Primitive.Finally<##2>(#1,#2)" // todo: handle cps
-  js inline "_primfinally(action,hndl, (typeof _k === 'undefined' ? undefined : _k))"
+  cs inline "Eff.Op.HandleFinally<##2>(#1,#2)"
+  js inline "$std_core._handle_finally(#1,#2)"
 }
 
-
-// Catch an exception raised by `error` and handle it.
-// Use `on-exn` or `on-fail` when appropiate.
-extern catch : forall<e,a> ( action : () -> <exn|e> a, hndl: exception -> e a) -> e a {
-  cs inline "Primitive.Catch<##2>(#1,#2)" // todo: handle cps
-  js inline "_primcatch(#1, #2, (typeof _k === 'undefined' ? undefined : _k))"
+// Catch any exception raised in `action` and handle it.
+// Use `on-exn` or `on-exit` when appropiate.
+extern try( action : () -> <exn|e> a, hndl: exception -> e a ) : e a {
+  cs inline "Eff.Op.HandleCatch<##1>(#1,#2, false)"
+  js inline "$std_core._handle_catch(#1, #2, false)"
 }
 
-
-// Set a `hndler` that is called when an exception is raised in the `action` block.
-fun on-exn( hndler : exception -> <exn|e> (), action : () -> <exn|e> a ) : <exn|e> a
-{
-  catch-on-exn( action, fun(exn){ hndler(exn); throw(exn) })
+private extern prim-try-some( action : () -> <exn|e> a, hndl: exception -> <exn|e> a) : <exn|e> a {
+  cs inline "Eff.Op.HandleCatch<##1>(#1,#2, false)"
+  js inline "$std_core._handle_catch(#1, #2, false)"
 }
 
-private extern catch-on-exn : forall<e,a> ( action : () -> e a, hndler: exception -> e a) -> e a {
-  cs inline "Primitive.Catch<##2>(#1,#2)" // todo: handle cps
-  js inline "_primcatch(#1, #2, (typeof _k === 'undefined' ? undefined : _k))"
+// _Deprecated_; use `try` instead. Catch an exception raised by `throw` and handle it.
+// Use `on-exn` or `on-exit` when appropiate.
+fun catch( action : () -> <exn|e> a, hndl: exception -> e a) : e a {
+  try(action,hndl)
 }
 
+// Set a `hndler` that is called only when an exception is raised in the `action` block.
+fun on-exn( hndler : exception -> <exn|e> (), action : () -> <exn|e> a ) : <exn|e> a {
+  prim-try-some( action, fun(exn){ hndler(exn); throw(exn) })
+}
 
 // Set a `hndler` that is always called when the `action` finishes (either normally or with an exception).
-fun on-exit( hndler : () -> e (), action : () -> e a ) : e a
-{
+// Note that `on-exit(handler,action) == finally(action,handler)`.
+fun on-exit( hndler : () -> e (), action : () -> e a ) : e a {
   finally(action,hndler)
 }
 
-// Set a `hndler` that is called if `action` returns without raising an exception.
-fun on-success( hndler : () -> e (), action : () -> e a ) : e a
-{
-  val x = action()
-  hndler()
-  return x
+
+// A `:try` type represents a first-class exception result.
+type try<a> {
+  Exn( exception : exception )
+  Ok( result : a )
 }
 
-// Transform an exception effect to an `:either` type.
-fun try( action : () -> <exn|e> a ) : e either<exception,a> {
-  catch({ Right(action()) },Left)
+// Transform an exception effect to a `:try` type.
+fun try( action : () -> <exn|e> a ) : e try<a> {
+  try({ Ok(action()) },Exn)
 }
 
 // Return a default value when an exception is raised
-fun try( value : a , action : () -> <exn|e> a ) : e a {
-  catch( action, fun(_) { value })
+fun try-default( value : a , action : () -> <exn|e> a ) : e a {
+  try( action, fun(_) { value })
 }
 
-// Transform an `:either` type back to an `exn` effect by throwing on `Left`.
-fun untry( ex : either<exception,a> ) : exn a {
+// Transform an `:try` type back to an `exn` effect.
+fun untry( ex : try<a> ) : exn a {
   match(ex) {
-    Left(exn) -> throw(exn)
-    Right(x)  -> x
+    Exn(exn) -> throw(exn)
+    Ok(x)    -> x
   }
 }
+
+// ----------------------------------------------------------------------------
+// Cancelation
+// Internally implemented using an (uncatchable) exception
+// ----------------------------------------------------------------------------
+
+type extend exception-info {
+  private con Cancel
+}
+
+// Was this a cancelation exception?
+fun canceled?( exn : exception ) {
+  match(exn.info) {
+    Cancel -> True
+    _      -> False
+  }
+}
+
+// _unsafe_. The cancelation exception. User code should never throw
+// this exception as it cannot be caught (but it is respected by `finally` blocks).
+// It is used internally to `finalize` effect handlers that do not resume.
+fun unsafe-cancel-exn() : exception {
+  exception("computation is canceled",Cancel)
+}
+
+private extern prim-try-all( action : () -> <exn|e> a, hndl: exception -> e a ) : e a {
+  cs inline "Eff.Op.HandleCatch<##1>(#1,#2,true)"
+  js inline "$std_core._handle_catch(#1,#2,true)"
+}
+
+// _unsafe_. Catch any exception, including a possible cancelation.
+// Unsafe to use in general as you must guarantee to later use `untry` to re-throw
+// at least a cancelation exception.
+fun unsafe-try-all( action : () -> <exn|e> a) : e try<a> {
+  prim-try-all({Ok(action())},Exn);
+}
+
+
 
 // ----------------------------------------------------------------------------
 // Internal types
@@ -297,18 +351,42 @@ type optional<a> {
 // Abstract type used for passing `null` values to external functions
 type null<a>
 
+// Unsafe: transform any type to a `null` type; used internally by the compiler.
+external ".null-any"(x : a) : null<a> {
+  cs inline "#1"
+  js inline "(#1==null ? null : #1)"  // undefined -> null
+}
+
 // Transform a `:maybe` type to a `:null` type (using `null` for `Nothing`).
 external null(x : maybe<a>) : null<a> {
-  cs inline "(#1==std_core._maybe<##1>.Nothing_ ? default(##1) : #1.@value)"
+  cs inline "(#1.tag_ == __std_core._maybe_Tag.Nothing ? default(##1) : #1.@value)"
   js inline "(#1==null ? null : #1.value)"
 }
 
 // Transform a `:null` type to a `:maybe` type. Note that it is not
 // always the case that `id(x) == maybe(null(x))` (e.g. when `x = Just(Nothing)`).
 external maybe( n : null<a> ) : maybe<a> {
-  cs inline "(#1==null ? std_core._maybe<##1>.Nothing_ : new std_core._maybe<##1>(#1))"
+  cs inline "(EqualityComparer<##1>.Default.Equals(#1,default(##1)) ? __std_core._maybe<##1>.Nothing_ : new __std_core._maybe<##1>(#1))"
   js inline "(#1==null ? $std_core.Nothing : $std_core.Just(#1))"
 }
+
+// Cast a integer that is zero to a null
+fun null( i : int ) : null<int>  {
+    i.maybe.null
+}
+
+// Cast an empty string a null
+fun null( s : string ) : null<string>  {
+    s.maybe.null
+}
+
+// Cast a boolean `False` to null
+fun null( b : bool ) : null<()> {
+    b.maybe.null
+}
+
+val null-const : forall<a> null<a> = null(Nothing)
+
 
 
 // ----------------------------------------------------------------------------
@@ -755,13 +833,20 @@ fun map-indexed-peek(xs : list<a>, f : (idx : int, value : a, rest : list<a> ) -
 // Reverse a list.
 fun reverse(xs : list<a>) : list<a>
 {
+  reverse-append( xs, Nil )
+}
+
+// Efficiently reverse a list `xs` and append it to `tl`:\
+// `reverse-append(xs,tl) == reserve(xs) + tl
+fun reverse-append( xs : list<a>, tl : list<a> ) : list<a>
+{
   fun reverse-acc(acc : list<a>, ys : list<a> ) : list<a> {
     match(ys) {
       Cons(x,xx) -> reverse-acc(Cons(x,acc),xx)
       _          -> acc
     }
   }
-  reverse-acc(Nil,xs)
+  reverse-acc(tl,xs)
 }
 
 // Append two lists.
@@ -1181,10 +1266,10 @@ fun compare( x : char, y : char ) : order
 }
 
 // Convert a character to its unicode code point
-extern inline int : (char) -> int { inline "(#1)" }
+extern inline int : (char) -> int { inline "#1"; cs inline "new BigInteger(#1)" }
 
 // Convert a unicode code point to a character
-extern inline char : (int) -> char { inline "(#1)" }
+extern inline char : (int) -> char { inline "(#1)"; cs inline "Primitive.IntToInt32(#1)" }
 
 // Add two character code points
 fun (+)(c : char, d : char) : total char  -> (c.int + d.int).char
@@ -1242,6 +1327,11 @@ fun compare( x : bool, y : bool) : order
   if (x < y) then Lt
   elif (x > y) then Gt
   else Eq
+}
+
+// Transform a boolean to a maybe type, using `Nothing` for `False`
+fun maybe( b : bool ) : maybe<()> {
+    if (b) then Just(()) else Nothing
 }
 
 // ----------------------------------------------------------------------------
@@ -1485,6 +1575,11 @@ fun sum( xs : list<int> ) : int
   xs.foldl( 0, fun(x,y) { x + y } )
 }
 
+// Transform an integer to a maybe type, using `Nothing` for `0`
+fun maybe( i : int ) : maybe<int> {
+    if (i==0) then Nothing else Just(i)
+}
+
 // ----------------------------------------------------------------------------
 // 32-bit integers
 // Just define the operations needed for defining the std/core interface but
@@ -1496,14 +1591,14 @@ fun sum( xs : list<int> ) : int
 type int32
 
 // Convert an `:int32` to an `:int`.
-private extern inline int( i : int32 ) : int {
+extern inline int( i : int32 ) : int {
   cs inline "(new BigInteger(#1))"
   js "$std_core._int_double"
 }
 
 // Convert an integer to an `:int32`. The number is _clamped_ to the maximal or minimum `:int32`
 // value if it is outside the range of an `:int32`.
-private extern inline int32  : (int) -> int32   {
+extern inline int32  : (int) -> int32   {
   cs "Primitive.IntToInt32"
   js "$std_core._int_to_int32"
 }
@@ -1595,8 +1690,9 @@ fun sign( d : double ) : order {
   if (d<0.0) then Lt elif (d>0.0) then Gt else Eq
 }
 
-fun (~)(d : double ) : double {
-  0.0 - d
+// Negate a `:double`.
+extern inline (~)(d : double ) : double {
+  inline "(-#1)"  // inline so `~0.0` becomes negative zero
 }
 
 
@@ -2012,6 +2108,11 @@ fun notempty?( s : string ) : bool {
   s != ""
 }
 
+// Transform a string to a maybe type, using `Nothing` for an empty string
+fun maybe( s : string ) : maybe<string> {
+    if (s.empty?) then Nothing else Just(s)
+}
+
 
 private extern inline splitv : ( s : string,  sep : string ) -> vector<string> {
   cs inline "(#1.Split(new String[]{#2}, StringSplitOptions.None))";
@@ -2266,6 +2367,7 @@ extern vector( xs : list<a> ) : vector<a> {
   cs inline "Primitive.UnVList<##1>(#1)"
   js inline "_unvlist(#1)"
 }
+
 
 
 
@@ -2549,6 +2651,11 @@ private extern xtrace : ( message : string ) -> ()  {
   js "_trace"
 }
 
+private extern xtrace-any : forall<a>( message: string, x : a ) -> ()  {
+  cs "Primitive.TraceAny"
+  js "_trace_any"
+}
+
 private val trace-enabled : ref<global,bool> = unsafe-total { ref(True) }
 
 // Trace a message used for debug purposes.
@@ -2561,6 +2668,11 @@ public fun trace( message : string ) : () {
   }
 }
 
+public fun trace-any( message : string, x : a ) : () {
+  unsafe-total {
+    if (!trace-enabled) then xtrace-any(message,x)
+  }
+}
 // Disable tracing completely.
 public fun notrace() : st<global> () {
   trace-enabled := False
@@ -2816,88 +2928,6 @@ type handled    :: HX -> X;
 // Linear effects are lifted to an atomic effect using the `:handled1` type constructor
 type handled1   :: HX1 -> X;
 
-// Effect operations with result type `:a`
-type open operation<a>
-
-// Cps effect. This is used by the compiler internally to ensure certain funs
-// are compiled with a cps translation
-effect cps {
-  cps() : ()
-}
-
-// Handle the `:cps` effect.
-val uncps = handler {
-  return x -> x
-  cps()    -> resume(())
-}
-
-// inject the `:cps` effect into a non-cps function
-extern incps( action: () -> e a ) : <cps|e> a {
-  js inline "(action.length === 1 ? action(_k) : _k(action()))"
-}
-
-// inject the `:cps` effect into a non-cps function with one argument
-extern incps1( action: a -> e b, x : a ) : <cps|e> b {
-  js inline "(action.length === 2 ? action(x,_k) : _k(action(x)))"
-}
-
-// inject the `:cps` effect into a non-cps function with two arguments
-extern incps2( action: (a,b) -> e c, x : a, y : b ) : <cps|e> c {
-  js inline "(action.length === 3 ? action(x,y,_k) : _k(action(x,y)))"
-}
-
-
-// Continuation alias. Used internally to do special checks on cps converted code.
-alias cont<a,e,b> = a -> e b
-
-
-// ----------------------------------------------------------------------------
-// Handling exceptions when in cps / effect handling mode.
-// These are called transparently from the primcatch/primfinally funs
-// ----------------------------------------------------------------------------
-
-private effect hexn {
-  hthrow(exn : exception) : void  // cannot resume
-}
-
-private fun hcatch( action, ehandler ) {
-  handle(action) {
-    return x    -> x
-    hthrow(exn) -> ehandler(exn)
-  }
-}
-
-private fun hfinally( action, fhandler ) {
-  handle(action) {
-    return x    -> {
-      fhandler()
-      x
-    }
-    hthrow(exn) -> {
-      fhandler()
-      throw(exn)
-    }
-  }
-}
-
-type handler-context
-
-extern capture-handler-context(upto:int32) : ndet handler-context {
-  js "_capture_handler_context"
-}
-
-extern resume-in-handler-context( context : handler-context, resume : a -> <cps|e> b, arg : a ) : <cps|e> b {
-  js inline "_resume_in_handler_context(#1,#2,#3,_k)"
-}
-
-extern invoke-in-handler-context( context : handler-context, action : a -> io (), arg : a ) : io () {
-  js "_invoke_in_handler_context"
-}
-
-extern current-handler-top() : ndet int32 {
-  js inline "$htop"
-}
-
 
 // ----------------------------------------------------------------------------
 // Handler primitives.
@@ -2905,129 +2935,179 @@ extern current-handler-top() : ndet int32 {
 // the continuations are not safely typed in plain Koka
 // ----------------------------------------------------------------------------
 
-// The Yield monad
-type yld<a> {
-  Yield<b>( op: operation<b>, cont : b -> yld<a> )
-  Result( result: a )
+
+extern inject-exn(action : () -> e a) : <exn|e> a {
+  js "$std_core._handle_inject_exn"
 }
 
-extern inline ".yieldop"( op : operation<a> ) : b { // , k : cont<a,e,b> ) : e yld<b> {
-  cs inline "Primitive.YieldOp<##1,##2>(#1,_k)"
-  js inline "$std_core.Yield(#1,_k)"
+extern inline ".inject-effect"<a::V,e1::E,e2::E>( effect-name : string, action : () -> e1 a ) : e2 a {
+  js inline "$std_core._handle_inject(#1,0,#2)"
 }
 
-extern ".yieldop1"( efftag: string, op : a ) : b {
-  js inline "$yield_linearx(#1,#2)"
+extern inline ".inject-resource"<a::V,e::E>( effect-name : string, resource-tag : int, action : () -> e a ) : e a {
+  js inline "$std_core._handle_inject(#1,#2,#3)"
 }
 
-/*
-extern ".yieldop1"( op : operation<a> ) : a {
-  js inline "$yield_linear(#1)"
-}
-*/
+// Yield alias
+alias yld<a> = a
 
-extern inline ".toany"( x : a ) : any {
+// Resources identify specific handlers
+type resource<e::HX> {
+  con ".Resource"(:int)
+}
+
+
+extern inline bind( x : yld<a>, next : a -> e yld<b> ) : e yld<b> {
+  cs inline "Eff.Op.Bind<##1,##2>(#1,#2)"
+  js "$std_core._bind"
+}
+
+extern ".yieldop"( effect-name : string, op-name : string, op-resource : int, op-idx : int, op : a ) : yld<b> {
+  cs inline "Eff.Op.YieldOp<##1,##2>(#1,#2,(int)#4,#5)"
+  js inline "$std_core._yield_op(#1,#2,#5,#4,#3)"
+}
+
+extern ".yieldop-x1"<a,b,x>( effect-name : string, op-name : string, op-resource : int, op-idx : int, op : a, def : maybe<x> /* just to ensure `x` is passed as a type parameter */) : yld<b> {
+  cs inline "Eff.Op.YieldOpX1<##1,##2,##3>(#1,#2,(int)#4,#5)"
+  js inline "$std_core._yield_op(#1,#2,#5,#4,#3)"
+}
+
+extern ".finalize"( resume : (a) -> e b, after : () -> e b ) : e b {
+  cs inline "Eff.Op.RunFinalizers<##1,##2>(#1,#2)"
+  js "$std_core._run_finalizers"
+}
+extern ".finalize1"( resume : (a,l) -> e b, result : () -> e b ) : e b {
+  cs inline "Eff.Op.RunFinalizers<##1,##2>(#1,#2)"
+  js "$std_core._run_finalizers"
+}
+
+type handler-branch0<e::E,a>
+type handler-branch1<e::E,l,a>
+
+extern ".makeHandlerBranch0"( resume-kind : int, op-name : string,
+                              branch : (resume : (result : a) -> e b, op : c) -> e b
+                            ) : total handler-branch0<e,b> {
+  cs inline "new Eff.Branch<##3,##1,##2>((Eff.ResumeKind)((int)#1),#2,#3)"
+  js "$std_core._new_branch"
+}
+
+extern ".makeHandlerBranch1"( resume-kind : int, op-name : string,
+                              branch : (resume : (result : a, new-local: l) -> e b, op : c, local : l) -> e b
+                            ) : total handler-branch1<e,l,b> {
+  cs inline "new Eff.Branch1<##5,##3,##1,##2>((Eff.ResumeKind)((int)#1),#2,#3)"
+  js "$std_core._new_branch1"
+}
+
+extern ".makeHandlerBranch0-x1"( resume-kind : int, op-name : string,
+                                branch : any // forall<x>(resume : (result : a<x>) -> e b, op : c<x>) -> e b
+                              ) : total handler-branch0<e,b> {
+  cs inline "new Eff.BranchX1<##1>((Eff.ResumeKind)((int)#1),#2,(TypeFun1)#3)"
+  js "$std_core._new_branch"
+}
+
+extern ".makeHandlerBranch1-x1"( resume-kind : int, op-name : string,
+                                 branch : any // forall<x>(resume : (result : a<x>, new-local: l) -> e b, op : c<x>, local : l) -> e b
+                               ) : total handler-branch1<e,l,b> {
+  cs inline "new Eff.Branch1X1<##3,##1>((Eff.ResumeKind)((int)#1),#2,(TypeFun1)#3)"
+  js "$std_core._new_branch1"
+}
+
+val null-return : forall<a,e> null<a -> e a>    = null-const
+val null-return1 : forall<a,l,e> null<(a,l) -> e a> = null-const
+
+
+extern ".makeHandler0"( effect-name : string,
+                        reinit : null<() -> e ()>,
+                        ret : null<a -> e b>,
+                        final : null<() -> e ()>,
+                        branches : vector<handler-branch0<e,b>>,
+                        handler-kind : int
+                      ) : total ((action : () -> e1 a) -> e b) {
+  cs inline "Eff.Handler0<##1,##2>.Create(#1,#2,#3,(Eff.HandlerKind)((int)#4))"
+  js "$std_core._new_handler"
+}
+
+extern ".makeHandler1"( effect-name : string,
+                        reinit : null<() -> e l>,
+                        ret : null<(result : a, local : l) -> e b>,
+                        final : null<(local : l) -> e ()>,
+                        branches : vector<handler-branch1<e,l,b>>,
+                        handler-kind : int
+                      ) : total ((initial-local : l, action : () -> e1 a) -> e b) {
+  cs inline "Eff.Handler1<##4,##1,##2>.Create(#1,#2,#3,(Eff.HandlerKind)((int)#4))"
+  js "$std_core._new_handler1"
+}
+
+extern ".makeResourceHandler0"( effect-name : string,
+                        reinit : null<() -> e ()>,
+                        ret : null<a -> e b>,
+                        final : null<() -> e ()>,
+                        branches : vector<handler-branch0<e,b>>,
+                        handler-kind : int,
+                        resource-tag : int
+                      ) : total ((action : () -> e1 a) -> e b) {
+  cs inline "Eff.Handler0<##1,##2>.Create(#1,#2,#3,(Eff.HandlerKind)((int)#4))"
+  js "$std_core._new_resource_handler"
+}
+
+extern ".makeResourceHandler1"( effect-name : string,
+                        reinit : null<(local : l) -> e l>, 
+                        ret : null<(result : a, local : l) -> e b>,
+                        final : null<(local : l) -> e ()>,
+                        branches : vector<handler-branch1<e,l,b>>,
+                        handler-kind : int,
+                        resource-tag : int
+                      ) : total ((initial-local : l, action : () -> e1 a) -> e b) {
+  cs inline "Eff.Handler1<##4,##1,##2>.Create(#1,#2,#3,(Eff.HandlerKind)((int)#4))"
+  js "$std_core._new_resource_handler1"
+}
+
+extern ".makeFreshResourceHandler0"( effect-name : string,
+                        reinit : null<() -> e ()>,
+                        ret : null<a -> e b>,
+                        final : null<() -> e ()>,
+                        branches : vector<handler-branch0<e,b>>,
+                        handler-kind : int,
+                        resource-tag : int,
+                        resource-wrap: int -> c
+                      ) : total ((action : (c) -> e1 a) -> e b) {
+  cs inline "Eff.Handler0<##1,##2>.Create(#1,#2,#3,(Eff.HandlerKind)((int)#4))"
+  js "$std_core._new_resource_handler"
+}
+
+extern ".makeFreshResourceHandler1"( effect-name : string,
+                        reinit : null<() -> e l>, 
+                        ret : null<(result : a, local : l) -> e b>,
+                        final : null<(local : l) -> e ()>,
+                        branches : vector<handler-branch1<e,l,b>>,
+                        handler-kind : int,
+                        resource-tag : int,
+                        resource-wrap: int -> c
+                      ) : total ((initial-local : l, action : (c) -> e1 a) -> e b) {
+  cs inline "Eff.Handler1<##4,##1,##2>.Create(#1,#2,#3,(Eff.HandlerKind)((int)#4))"
+  js "$std_core._new_resource_handler1"
+}
+
+// Used for handlers with just a `return` branch
+extern ".makeHandlerRet0"(  ignored-effect-name : string,
+                         reinit : null<() -> e ()>,
+                         ret : null<(result:a) -> e b>,
+                         final : null<() -> e ()>,
+                         ignored-branches : int,
+                         ignored-kind : int
+                       ) : total ((action : () -> e a) -> e b) {
+  js inline "$std_core._new_empty_handler(#2,#3,#4)"
+}
+
+
+// .open is used in the compiler to open up closed effects.
+// Usually simplified away but still present if --no-simplify flag is given
+extern inline ".open"<e1 :: E, e2 :: E, a, b>( x : a ) : total b {
   inline "#1"
 }
 
-extern inline ".applyK"(k : a -> e b, x : a) : e b {
-  js inline "(#1 || $std_core.id)(#2)"
+// Magic casting to the `:any` type.
+extern inline ".toany"( x : a ) : any {
+  inline "#1"
+  cs inline "(object)(#1)"
 }
-
-extern ".htop"() : any {
-  js inline "$htop"
-}
-
-extern ".hstack"() : any {
-  js inline "$hstack"
-}
-
-extern outer-resume( resume : a -> <cps,io> b ) : (a -> io b) {
-  js "_outer_resume"
-}
-
-
-extern ".makeHandler0"( optag:string, // opmatch : operation<c> -> opmatch<e1,e,o>,
-                          ret : a -> <cps|e> b,
-                          ops : (l1:any, l2:int, cont: (c) -> yld<a>, op:o,
-                                 resume:(l1:any,l2:int, cont:(c) -> yld<a>,c) -> <cps|e> b) -> <cps|e> b
-                        ) : total ((action : () -> e1 a) -> e b) {
-  js inline "$makeGenOptHandler0(optag,false,ret,ops)"
-}
-
-extern ".makeHandlerRet0"( optag:string, ret : a -> <cps|e> b, ops : int ) : total ((action : () -> e a) -> e b) {
-  js inline "$makeGenOptHandler0(optag,false,ret,ops)"
-}
-
-extern ".makeShallowHandler0"( optag:string, // opmatch : operation<c> -> opmatch<e1,e,o>,
-                          ret : a -> e b,
-                          ops : (l1:any, l2:int, cont: (c) -> yld<a>, op:o,
-                                resume:(l1:any,l2:int, cont:(c) -> yld<a>, c) -> e a) -> e b
-                        ) : total ((action : () -> e a) -> e b) {
-  js inline "$makeGenOptHandler0(optag,true,ret,ops)"
-}
-
-
-extern ".makeHandler1"( optag : string, // opmatch : operation<c> -> opmatch<e1,e,o>,
-                          ret : (d,a) -> <cps|e> b,
-                          ops : (l1:any, l2:int, cont:(c) -> yld<a>, op:o,
-                                  resume: ((l1:any, l2:int, cont:(c) -> yld<a>, loc: d, x: c) -> <cps|e> b),
-                                  loc:d) -> <cps|e> b
-                        ) :  total ((loc:d, action: () -> e1 a) -> e b) {
-  js inline "$makeGenOptHandler1(optag,false,ret,ops)"
-}
-
-
-/*
-// Abstract operation matching
-abstract type opmatch<e1::E,e2::E,a> {
-  OpMatch( : a )
-  OpNoMatch
-}
-
-fun ".conOpMatch"(x)  { OpMatch(x) }
-fun ".conOpNoMatch"() { OpNoMatch  }
-
-fun ".makeHandler0"( optag:string, matchop : operation<c> -> opmatch<e1,e,o>,
-                          res : a -> <cps|e> b, ops : (op:o, resume:(bool,c) -> <cps|e> b) -> <cps|e> b  ) : total ((action : () -> e1 a) -> e b) {
-  fun hndler(yld) {
-    match(yld) {
-      Yield(op,f) -> {
-        match(matchop(op)) {
-          OpMatch(eop) -> ops(eop,fun(_,x) { hndler(f(x))})
-          OpNoMatch    -> reyield(op,fun(x) { hndler(f(x))})
-        }
-      }
-      Result(x) -> res(x)
-    }
-  }
-  unsafeMakeHandler0(hndler)
-}
-
-fun ".makeHandler1"( matchop : operation<c> -> opmatch<e1,e,o>, res : (a,d) -> <cps|e> b, ops : (op:o, cont: ((c,d) -> <cps|e> b), loc:d) -> <cps|e> b  ) :  total ((action: () -> e1 a, loc:d) -> e b) {
-  fun hndler(yld,loc) {
-    match(yld) {
-      Yield(op,f) -> {
-        match(matchop(op)) {
-          OpMatch(eop) -> ops(eop, fun(x,loc0) { hndler(f(x),loc0) }, loc)
-          OpNoMatch    -> reyield(op, fun(x) { hndler(f(x),loc) })
-        }
-      }
-      Result(x) -> res(x,loc)
-    }
-  }
-  unsafeMakeHandler1(hndler)
-}
-
-private extern unsafeMakeHandler0( hndler : yld<a> -> <cps|e> b ) : total ((action : () -> e1 a) -> e b) {
-  js inline "fun(_action,_k){ _k = _k || id; return hndler(_action(Result),_k); }"
-}
-
-private extern unsafeMakeHandler1( hndler : (yld<a>,d) -> <cps|e> b ) : total ((action : () -> e1 a, loc : d) -> e b) {
-  js inline "fun(_action,_loc,_k){ _k = _k || id; return hndler(_action(Result),_loc,_k); }"
-}
-
-private extern reyield( op: operation<b>, f : b -> <cps|e> a ) : <cps|e> a {
-  js inline "Yield(op,fun(_x) { return f(_x,_k); } )"
-}
-*/
