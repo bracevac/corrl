@@ -95,15 +95,13 @@ Error: This function has type
 
 (* Polyvariadic hlist map: (a1 -> b1 * ... * an -> bn) hlist -> (a1 * ... * an) hlist -> (b1 * ... * bn) hlist  *)
 module HListMap = struct
-  let z: unit hlist -> unit hlist -> unit hlist =
-    function
-    | HNil -> (function
-               | HNil -> HNil)
+  let z: unit hlist -> unit hlist -> unit hlist = (fun HNil HNil -> HNil)
 
-  let s (type a) (type b) (type c) (type d) (type e)
-        (n: a hlist -> b hlist -> c hlist)
-        (fs: ((d -> e) * a) hlist)
-        (hs: (d * b) hlist): (e * c) hlist =
+  (* let s (type a) (type b) (type c) (type d) (type e)
+   *       (n: a hlist -> b hlist -> c hlist)
+   *       (fs: ((d -> e) * a) hlist)
+   *       (hs: (d * b) hlist): (e * c) hlist = *)
+  let s n fs hs =
     match fs with
     | HCons (f, fs') ->
        match hs with
@@ -121,11 +119,12 @@ end
 
 module HListFoldr = struct
   let z: type a. unit hlist -> unit hlist -> a -> a = (fun _ _ x -> x)
-  let s (type a) (type b) (type c) (type d) (type e) (type f)
-        (n: a hlist -> b hlist -> c -> d)
-        (fs: ((e -> d -> f) * a) hlist)
-        (hs: (e * b) hlist)
-        (c: c): f =
+  (* let s (type a) (type b) (type c) (type d) (type e) (type f)
+   *       (n: a hlist -> b hlist -> c -> d)
+   *       (fs: ((e -> d -> f) * a) hlist)
+   *       (hs: (e * b) hlist)
+   *       (c: c): f = *)
+  let s n fs hs c =
     match fs with
     | HCons (f, fs') ->
        match hs with
@@ -142,19 +141,29 @@ module HListFoldr = struct
 end
 
 module HListProjection = struct
-  let z: type a b. (a * b) hlist -> a = (fun (HCons (x,y)) -> x)
-  let s (type a) (type b) (type c) (type d) (n: (a * b) hlist -> c): (d * (a * b)) hlist -> c = function
-    | HCons (_, hs) -> n hs
-
+  let z =   (fun (HCons (hd,_)) -> hd)
+  let s n = (fun (HCons (_,hs)) -> n hs)
   (* let once = s z
    * let twice = s (s z)
    * let thrice = s (s (s z)) *)
 end
 
-module HListHd = struct
+module HListTake = struct
+  let z =   (fun _ -> HNil)
+  let s n = (fun (HCons (hd,hs)) -> HCons(hd, n hs))
+  (* tests *)
+  (* let once = s z
+   * let twice = s (s z)
+   * let thrice = s (s (s z)) *)
 end
 
-module HListTl = struct
+module HListDrop = struct
+  let z =   (fun hs -> hs)
+  let s n = (fun (HCons (hd,hs)) -> n hs)
+  (* tests *)
+  (* let once = s z
+   * let twice = s (s z)
+   * let thrice = s (s (s z)) *)
 end
 
 (* Polyvariadic, position-dependent definitions *)
