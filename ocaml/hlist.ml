@@ -114,9 +114,9 @@ module HListMap = struct
   let map n fs hs = n fs hs
 
   (* tests *)
-  let once = s z
-  let twice = s (s z)
-  let thrice = s (s (s z))
+  (* let once = s z
+   * let twice = s (s z)
+   * let thrice = s (s (s z)) *)
 end
 
 module HListFoldr = struct
@@ -136,9 +136,25 @@ module HListFoldr = struct
   let foldr n fs hs = n fs hs
 
   (* tests *)
-  let once = s z
-  let twice = s (s z)
-  let thrice = s (s (s z))
+  (* let once = s z
+   * let twice = s (s z)
+   * let thrice = s (s (s z)) *)
+end
+
+module HListProjection = struct
+  let z: type a b. (a * b) hlist -> a = (fun (HCons (x,y)) -> x)
+  let s (type a) (type b) (type c) (type d) (n: (a * b) hlist -> c): (d * (a * b)) hlist -> c = function
+    | HCons (_, hs) -> n hs
+
+  (* let once = s z
+   * let twice = s (s z)
+   * let thrice = s (s (s z)) *)
+end
+
+module HListHd = struct
+end
+
+module HListTl = struct
 end
 
 (* Polyvariadic, position-dependent definitions *)
