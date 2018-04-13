@@ -150,7 +150,7 @@ end
 
 module HListTake = struct
   let z =   (fun _ -> HNil)
-  let s n = (fun (HCons (hd,hs)) -> HCons(hd, n hs))
+  let s n = (fun (HCons (hd,hs)) -> HCons (hd, n hs))
   (* tests *)
   (* let once = s z
    * let twice = s (s z)
@@ -167,8 +167,21 @@ module HListDrop = struct
 end
 
 (* Polyvariadic, position-dependent definitions *)
-module HListZipper = struct
 
+(* First, zippers *)
+module HListZipper = struct
+  let z = (fun (HCons (x,hs)) -> (HNil, (HCons (x,hs))))
+  let s (* (type a) (type b) (type c) (type d) (type e)
+         * (n: (a * b) hlist -> (c hlist * (d * e) hlist))
+         * (hs: (a * b) hlist) = *)
+    n hs =
+    let (left, HCons(x,right)) = n hs in
+    (HCons(x,left), right)
+
+  (* tests *)
+  let once = s z
+  let twice = s (s z)
+  let thrice = s (s (s z))
 end
 
 
