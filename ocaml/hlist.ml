@@ -133,11 +133,11 @@ perhaps we could use that style for composition and overcome the "no uniform num
   let zippers n hs = (fst (n hs)) HNil
 
   (* tests *)
-  (* let hlist  = (HCons (1, HCons (2, HCons (3, HCons (4, HNil)))))
-   * let once   = zippers z hlist
-   * let twice  = zippers (s z)
-   * let thrice = zippers (s (s z)) hlist
-   * let fourth = zippers (s (s (s z))) hlist *)
+  let hlist  = (HCons (1, HCons (2, HCons (3, HCons (4, HNil)))))
+  let once   = zippers z hlist
+  let twice  = zippers (s z) hlist
+  let thrice = zippers (s (s z)) hlist
+  let fourth = zippers (s (s (s z))) hlist
 end
 
 (* Finally, position-dependent mapping over the list of zippers *)
@@ -165,9 +165,28 @@ type 'a evt = 'a
 
 (* to construct type witnesses and map types to other types *)
 type 'a typ = Typ
-let witness: 'a -> 'a typ = (fun _ -> Typ)
-let evt_typ: 'a typ -> 'a evt typ = (fun _ -> Typ)
-let tparam_of: 'a r typ -> 'a typ = (fun _ -> Typ)
+let witness  : 'a -> 'a typ          = (fun _ -> Typ)
+let evt_typ  : 'a typ -> 'a evt typ  = (fun _ -> Typ)
+let tparam_of: 'a r typ -> 'a typ    = (fun _ -> Typ)
+let list_typ : 'a typ -> 'a list typ = (fun _ -> Typ)
+
+module type ElementWise = sig
+  type 'a wrap
+  (* (t,u) proof iff t and u are hlist phantom types (i.e. nested tuple types)
+     with (1) same length and (2) u_i = t_i wrao, i.e., u is type constructor (_ wrap) applied to t elementwise.   *)
+  type (_, _) proof =
+    | Base: (unit, unit) proof
+    | Step: ('a typ * 'a wrap typ * ('b, 'c) proof) -> (('a * 'b), ('a wrap * 'c)) proof
+end
+
+module ElementWiseWrap(T: sig type 'a wrap end): (ElementWise with type 'a wrap = 'a T.wrap) =
+  struct
+    type 'a wrap = 'a T.wrap
+
+    type (_, _) proof =
+      | Base: (unit, unit) proof
+      | Step: ('a typ * 'a wrap typ * ('b, 'c) proof) -> (('a * 'b), ('a wrap * 'c)) proof
+  end
 
 (* a slot exposing a generative effect, just as in our framework *)
 module type SLOT = sig
@@ -184,47 +203,48 @@ let mkSlot (type s) (t: s typ) =
      let memory = []
    end: (SLOT with type t = s))
 
-(* Implements a relation among phantom types of hlists *)
-module Hlist_Match_Slot_Evt = struct
-  (* (t,u) proof iff t and u are hlist phantom types (i.e. nested tuple types)
-     with (1) same length and (2) u_i = t_i evt slot, i.e., u is type constructor (_ evt slot) applied to t elementwise.   *)
-  type (_, _) proof =
-    | Base: (unit, unit) proof
-    | Step: ('a typ * 'a evt slot typ * ('b, 'c) proof) -> (('a * 'b), ('a evt slot * 'c)) proof
-end
+module WrapEvtSlot = ElementWiseWrap(struct type 'a wrap = 'a evt slot end)
+module WrapEvt = ElementWiseWrap(struct type 'a wrap = 'a evt end)
 
 (* A join consists of a type 'index' (hlist phantom type describing the arity and types) and
    a hlist of phantom type 'slots', which is related to 'index' by the Hlist_Match_Slot_Evt relation. *)
 module type JOIN = sig
-  type index (*  a1 ... an    *)
-  type slots (*  a1 slot ... an slot *)
-  (* You can construct a JOIN only if you can prove that the index and slots are in this relation:  *)
-  val p_is_wrapped: (index, slots) Hlist_Match_Slot_Evt.proof
+  type index  (*  a1 ... an    *)
+  type joined (*  a1 evt ... an evt *)
+  type slots  (*  a1 evt slot ... an evt slot *)
+
+  (* You can construct a JOIN only if you can prove that the types are related in all of the following ways:  *)
+  val p_index_joined_related: (index, joined) WrapEvt.proof
+  val p_index_slot_related: (index, slots) WrapEvtSlot.proof
   (* Expose the slots in a hlist to enable position-dependent and type safe code generation. *)
   val hlist: slots hlist (*   *)
 end
-type ('a, 'b) join = (module JOIN with type index = 'a and type slots = 'b)
+type ('a, 'b, 'c) join = (module JOIN with type index = 'a and type joined = 'b and type slots = 'c)
 
-let mkJoin (type i s) (p: (i,s) Hlist_Match_Slot_Evt.proof) (hl: s hlist) =
+let mkJoin (type i j s) (p_j: (i,j) WrapEvt.proof) (p_s: (i,s) WrapEvtSlot.proof) (hl: s hlist) =
   (module struct
      type index = i
+     type joined = j
      type slots = s
-     let p_is_wrapped = p
+     let p_index_joined_related = p_j
+     let p_index_slot_related = p_s
      let hlist = hl
-   end: (JOIN with type index = i and type slots = s))
+   end: (JOIN with type index = i and type joined = j and type slots = s))
 
 (* Polyvariadic join construction, an application of the techniques in http://okmij.org/ftp/Computation/extra-polymorphism.html#poly-var,
    and Daniel Fridlender and Mia Indrika: Do We Need Dependent Types? J. Functional Programming, 2000. *)
 module PolyJoin = struct
-let z k = k (mkJoin Hlist_Match_Slot_Evt.Base HNil)
-let s (type a b) n k x = n (fun (v: (a,b) join) ->
+let z k = k (mkJoin WrapEvt.Base WrapEvtSlot.Base HNil)
+let s (type a b c) n k x = n (fun (v: (a,b,c) join) ->
                              let module J = (val v) in
                              let element_typ = (tparam_of (witness x)) in
-                             let slot = (mkSlot (evt_typ element_typ)) in
+                             let event_typ = evt_typ element_typ in
+                             let slot = (mkSlot event_typ) in
                              let slot_typ = witness slot in
-                             let proof = Hlist_Match_Slot_Evt.Step (element_typ, slot_typ, J.p_is_wrapped) in
+                             let proof_joined = WrapEvt.Step (element_typ, event_typ, J.p_index_joined_related) in
+                             let proof_slots = WrapEvtSlot.Step (element_typ, slot_typ, J.p_index_slot_related) in
                              let hlist = HCons (slot, J.hlist) in
-                             let j = mkJoin proof hlist in
+                             let j = mkJoin proof_joined proof_slots hlist in
                              k j)
 let join n = n (fun x -> x)
 
@@ -249,24 +269,67 @@ end
 
 (* Notice that so far, everything is some kind of fold, using z and s. *)
 
+module CartesianSigSpec = struct
+  (* (t,u,v) proof iff t and u are hlist phantom types (i.e. nested tuple types)
+     with (1) same length and (2) u_i = t_i -> v, i.e., u is a hlist phantom type of
+     position dependent functions into the type v.   *)
+  type (_,_,_) proof =
+    | Base: (unit,unit,'c) proof
+    | Step: ('a typ * ('b, 'c, 'd) proof) -> ('a * 'b, ('a -> 'd) * 'c, 'd) proof
+end
+
 module type JOINCARTESIAN = sig
   include JOIN
+  (* cartesian =  ((a1 -> (a1 evt * ... * an evt) list)
+                 * (a2 -> (a1 evt * ... * an evt) list)
+                 * ...
+                 * (an -> (a1 evt * ... * an evt) list)) *)
+  type cartesian
+  val p_cartesian_signature: (index,cartesian,joined list) CartesianSigSpec.proof
+  val cartesian: cartesian hlist
+end
+type ('a, 'b, 'c, 'd) join_cartesian =
+  (module JOINCARTESIAN with type index = 'a and type joined = 'b and type slots = 'c and type cartesian = 'd)
 
-  (* TODO: type-level cartesian signature  *)
+module PolyCartesian = struct
+  let mkJoinCartesian (type i j s c) (join: (i,j,s) join)
+        (p_c: (i,c,j list) CartesianSigSpec.proof) (cartesianfuns: c hlist)
+    =
+    let module J = (val join) in
+    (module struct
+       include J
+       type cartesian = c
+       let p_cartesian_signature = p_c
+       let cartesian = cartesianfuns
+     end: (JOINCARTESIAN with type index = i and type joined = j and type slots = s and type cartesian = c))
+
+
+(* Key-issue: building the hlist of cartesian functions.
+ *)
+  (* let z = (PolyJoin.z, HListZipperMap.z)
+   * let s (np,nzm) = (PolyJoin.s np, HListZipperMap.s nzm)
+   * let make n =
+   *   let module PJ = PolyJoin in
+   *   let module ZM = HListZipperMap in
+   *   let pj_n = fst n in
+   *   let zm_n = snd n in
+   *   PJ.join pj_n (fun join_mod ->
+   *       let module J = (val join_mod) in
+   *       (\* need to specify: for all a b c, for all n, if n is the length of a hlist type h, for all
+   *         j, s.t. a b c is the jth zipper of h, and if a b c are slot lists, we map a hlist * (b * c) hlist
+   *        to join_mod.joined list.  *\)
+   *       let cartesian_fun (type a b c) (zipper: a hlist * (b slot * c) hlist) =
+   *
+   *       in (\* TODO: how to define this hassle-free *\)
+   *       (\* let cartesian = ZM.map_zippers zm_n J.slots ??? in  (\\* TODO: how do we supply the functions? *\\) *\)
+   *       (\* let p_cartesian_sig =    in *\) (\* TODO how to construct the proof from what we have? *\)
+   *       (\* mkJoinCartesian join_mod p_cartesian_sig *\)
+   *       failwith "not implemented, bro"
+   *     ) *)
+
+
 
 end
-type ('a, 'b) join_cartesian = (module JOINCARTESIAN with type index = 'a and type slots = 'b)
-
-module JoinCartesian(J: JOIN): (JOINCARTESIAN with type index = J.index and type slots = J.slots) =
-  struct
-    include J
-
-
-
-
-
-  end
-
 
 (* next step: cartesian impl *)
 (* DSL *)
