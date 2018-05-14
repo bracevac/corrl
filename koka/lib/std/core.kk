@@ -46,7 +46,7 @@ extern include {
 }
 
 extern include {
-  js file "contrib/biginteger.js"
+  js file "../../contrib/biginteger.js"
 }
 
 
@@ -178,6 +178,7 @@ type open exception-info {
   Assert
   Todo
   Range
+  Finalize
   Pattern( location : string, definition : string )
   System( errno : string )
   Internal( name : string )
@@ -292,6 +293,13 @@ fun untry( ex : try<a> ) : exn a {
   }
 }
 
+// Transform a `:try` type to a `:maybe` value.
+fun maybe( t : try<a> ) : maybe<exception> {
+    match(t) {
+        Exn(exn) -> Just(exn)
+        Ok -> Nothing
+    }
+}
 // ----------------------------------------------------------------------------
 // Cancelation
 // Internally implemented using an (uncatchable) exception
@@ -302,11 +310,19 @@ type extend exception-info {
 }
 
 // Was this a cancelation exception?
-fun canceled?( exn : exception ) {
+fun cancel?( exn : exception ) {
   match(exn.info) {
     Cancel -> True
     _      -> False
   }
+}
+
+// Was this a finalization exception?
+fun finalize?(exn : exception) {
+    match(exn.info) {
+        Finalize -> True
+        _ -> False
+    }
 }
 
 // _unsafe_. The cancelation exception. User code should never throw
@@ -2707,8 +2723,13 @@ extern main-console : forall<a,e> ( main : () -> e a ) -> e a {
 // The predicate `:hdiv<h,a,e>` signifies that if the type `:a` contains a reference to `:h`,
 // then the effect `:e` must contain the divergent effect (`:div`). This constraint is generated
 // when writing to the heap (see `(!)`) and is necessary to catch cases where code can diverge
-// by storing selfReferential funs in the heap.
+// by storing self referential functions in the heap.
 type hdiv :: (H,V,E) -> P
+
+// The predicate `:ediv<x,a,e>` signifies that if the type `:a` contains a reference to effect constant `:x",
+// then the effect `:e` must contain the divergent effect (`:div`). This constraint is generated
+// for operations on first-class effects where code can diverge through operations.
+type ediv :: (X,V,E) -> P
 
 // A reference `:ref<h,a>` points to a value of type `:a` in heap `:h`.
 type ref :: (H,V) -> V
@@ -2972,41 +2993,51 @@ extern ".yieldop-x1"<a,b,x>( effect-name : string, op-name : string, op-resource
   js inline "$std_core._yield_op(#1,#2,#5,#4,#3)"
 }
 
-extern ".finalize"( resume : (a) -> e b, after : () -> e b ) : e b {
-  cs inline "Eff.Op.RunFinalizers<##1,##2>(#1,#2)"
-  js "$std_core._run_finalizers"
+type resume-context<a,e::E,b>
+type resume-context1<a,e::E,b,l>
+
+extern resume( context : resume-context<a,e,b>, result : a ) : e b {
+  js inline "#1.resume(#2,undefined)"
 }
-extern ".finalize1"( resume : (a,l) -> e b, result : () -> e b ) : e b {
-  cs inline "Eff.Op.RunFinalizers<##1,##2>(#1,#2)"
-  js "$std_core._run_finalizers"
+
+extern resume( context : resume-context1<a,e,b,l>, result : a, local : l ) : e b {
+  js inline "#1.resume(#2,#3)"
+}
+
+extern finalize( context : resume-context<a,e,b>, result : c ) : e c {
+  js inline "#1.finalize(#2)"
+}
+
+extern finalize( context : resume-context1<a,e,b,l>, result : c ) : e c {
+  js inline "#1.finalize(#2)"
 }
 
 type handler-branch0<e::E,a>
 type handler-branch1<e::E,l,a>
 
 extern ".makeHandlerBranch0"( resume-kind : int, op-name : string,
-                              branch : (resume : (result : a) -> e b, op : c) -> e b
+                              branch : (resume-context<a,e,b>, op : c) -> e b
                             ) : total handler-branch0<e,b> {
   cs inline "new Eff.Branch<##3,##1,##2>((Eff.ResumeKind)((int)#1),#2,#3)"
   js "$std_core._new_branch"
 }
 
 extern ".makeHandlerBranch1"( resume-kind : int, op-name : string,
-                              branch : (resume : (result : a, new-local: l) -> e b, op : c, local : l) -> e b
+                              branch : (resume-context1<a,e,b,l>, op : c, local : l) -> e b
                             ) : total handler-branch1<e,l,b> {
   cs inline "new Eff.Branch1<##5,##3,##1,##2>((Eff.ResumeKind)((int)#1),#2,#3)"
   js "$std_core._new_branch1"
 }
 
 extern ".makeHandlerBranch0-x1"( resume-kind : int, op-name : string,
-                                branch : any // forall<x>(resume : (result : a<x>) -> e b, op : c<x>) -> e b
+                                branch : any // forall<x>(resume-context<a<x>,e,b>, op : c<x>) -> e b
                               ) : total handler-branch0<e,b> {
   cs inline "new Eff.BranchX1<##1>((Eff.ResumeKind)((int)#1),#2,(TypeFun1)#3)"
   js "$std_core._new_branch"
 }
 
 extern ".makeHandlerBranch1-x1"( resume-kind : int, op-name : string,
-                                 branch : any // forall<x>(resume : (result : a<x>, new-local: l) -> e b, op : c<x>, local : l) -> e b
+                                 branch : any // forall<x>(resume-context1<a<x>,e,b,l>, op : c<x>, local : l) -> e b
                                ) : total handler-branch1<e,l,b> {
   cs inline "new Eff.Branch1X1<##3,##1>((Eff.ResumeKind)((int)#1),#2,(TypeFun1)#3)"
   js "$std_core._new_branch1"
@@ -3028,7 +3059,7 @@ extern ".makeHandler0"( effect-name : string,
 }
 
 extern ".makeHandler1"( effect-name : string,
-                        reinit : null<() -> e l>,
+                        reinit : null<(local : l) -> e l>,
                         ret : null<(result : a, local : l) -> e b>,
                         final : null<(local : l) -> e ()>,
                         branches : vector<handler-branch1<e,l,b>>,
@@ -3051,7 +3082,7 @@ extern ".makeResourceHandler0"( effect-name : string,
 }
 
 extern ".makeResourceHandler1"( effect-name : string,
-                        reinit : null<(local : l) -> e l>, 
+                        reinit : null<(local : l) -> e l>,
                         ret : null<(result : a, local : l) -> e b>,
                         final : null<(local : l) -> e ()>,
                         branches : vector<handler-branch1<e,l,b>>,
@@ -3076,7 +3107,7 @@ extern ".makeFreshResourceHandler0"( effect-name : string,
 }
 
 extern ".makeFreshResourceHandler1"( effect-name : string,
-                        reinit : null<() -> e l>, 
+                        reinit : null<(local : l) -> e l>,
                         ret : null<(result : a, local : l) -> e b>,
                         final : null<(local : l) -> e ()>,
                         branches : vector<handler-branch1<e,l,b>>,
@@ -3097,6 +3128,17 @@ extern ".makeHandlerRet0"(  ignored-effect-name : string,
                          ignored-kind : int
                        ) : total ((action : () -> e a) -> e b) {
   js inline "$std_core._new_empty_handler(#2,#3,#4)"
+}
+
+// Used for handlers with just a `return` branch
+extern ".makeHandlerRet1"(  ignored-effect-name : string,
+                         reinit : null<(local:l) -> e l>,
+                         ret : null<(result:a, local:l) -> e b>,
+                         final : null<(local:l) -> e ()>,
+                         ignored-branches : int,
+                         ignored-kind : int
+                       ) : total ((local : l, action : () -> e a) -> e b) {
+  js inline "$std_core._new_empty_handler1(#2,#3,#4)"
 }
 
 

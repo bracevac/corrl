@@ -38,7 +38,7 @@ var platformVariantPath = path.join("Platform",platformVariant,"Platform")+path.
 var hsCompiler  = "ghc";
 var hsFlags     = "-fwarn-incomplete-patterns";
 var hsRunFlags  = "";
-var hsPackages  = ["random","text","parsec"];
+var hsPackages  = ["text","parsec"];
 var hsLinkFlags = (["base","containers","directory","process","mtl"].concat(hsPackages)).map(function(p){ return "-package " + p; }).join(" ");
 
 var alexCompiler= "alex";
@@ -55,7 +55,7 @@ var buildDir  = path.join(outputDir, variant);
 var depFile   = path.join(buildDir,"dependencies");
 var mainExe   = path.join(buildDir,main + "-" + version + exeExt);
 
-var kokaFlags = "-i" + libraryDir + " -icorrl -itest/algeff -itest/resource -itest/lib --core --checkcore " + (process.env.kokaFlags || "");
+var kokaFlags = "-i" + libraryDir + " -itest/algeff -itest/async -itest/resource -itest/lib --core --checkcore " + (process.env.kokaFlags || "");
 
 if (variant === "profile") {
   hsFlags += " -prof -fprof-auto -O2";
