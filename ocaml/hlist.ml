@@ -1,4 +1,6 @@
 
+open Higher
+
 (* Simple heterogeneous list GADT *)
 (* TODO overload standard list syntax *)
 type _ hlist =
@@ -8,6 +10,23 @@ type _ hlist =
 let rec hlength: type a. a hlist -> int = function
   | HNil -> 0
   | HCons (_, hs) -> 1 + (hlength hs)
+
+type 'f inj = { inj: 'a. 'a -> ('a, 'f) app }
+(*type ('f, 't) prj = { prj: 'a. ('a, 'f) app -> 't }*)
+
+
+(* Generate an hlist containing a polymorphic 'f inj function n times *)
+module Repeat = struct
+  let z f = HNil
+  let s n ({inj} as fn) =
+    let fs = n fn in
+    HCons (inj, fs)
+
+  (* tests *)
+  let once = s z
+  let twice = s (s z)
+  let thrice = s (s (s z))
+end
 
 (* Polyvariadic hlist map: (a1 -> b1 * ... * an -> bn) hlist -> (a1 * ... * an) hlist -> (b1 * ... * bn) hlist  *)
 module HListMap = struct
@@ -28,12 +47,12 @@ module HListMap = struct
   let map n fs hs = n fs hs
 
   (* tests *)
-  (* let once = s z
-   * let twice = s (s z)
-   * let thrice = s (s (s z)) *)
+  let once = s z
+  let twice = s (s z)
+  let thrice = s (s (s z))
 end
 
-module HListFoldr = struct
+module HListFoldR = struct
   let z: type a. unit hlist -> unit hlist -> a -> a = (fun _ _ x -> x)
   (* let s (type a) (type b) (type c) (type d) (type e) (type f)
    *       (n: a hlist -> b hlist -> c -> d)
@@ -56,7 +75,7 @@ module HListFoldr = struct
    * let thrice = s (s (s z)) *)
 end
 
-module HListFoldl = struct
+module HListFoldL = struct
   let z: type a. unit hlist -> unit hlist -> a -> a = (fun _ _ x -> x)
   let s n fs hs c =
     match fs with
@@ -76,6 +95,7 @@ end
 module HListProjection = struct
   let z =   (fun (HCons (hd,_)) -> hd)
   let s n = (fun (HCons (_,hs)) -> n hs)
+
   (* let once = s z
    * let twice = s (s z)
    * let thrice = s (s (s z)) *)
@@ -118,6 +138,52 @@ module HListZipper = struct
    * let twice = s (s z)
    * let thrice = s (s (s z)) *)
 end
+
+(* Like a zipper, but the left part in original order *)
+module HListSplitter = struct
+  let z = (HListProjection.z, HListTake.z, HListDrop.z)
+  let s (p,t,d) = (HListProjection.s p, HListTake.s t, HListDrop.s d)
+
+  let split (np, nt, nd) hs = (nt hs, np hs, HListDrop.(s nd) hs)
+
+  let hlist  = (HCons (1, HCons (2, HCons (3, HCons (4, HNil)))))
+  let once = split (s z) hlist
+  let twice = split (s (s z)) hlist
+  let thrice  = split (s (s (s z))) hlist
+end
+
+module Range = struct
+  (*This won't work, because types get non-uniform *)
+  (* let z z' s' = HCons (z', HNil)
+   * let s n z' s' =
+   *   let HCons (n', tl) = n z' s' in
+   *   HCons (s' n', HCons (n', tl)) *)
+
+  let z z' s' = (HCons (z', HNil), s' z', s')
+  let s n =
+    let (hs, n', s') = n in
+    (HCons (n', hs), s' n', s')
+end
+
+
+(* (\* The hlist of all splits of an hlist  *\)
+ * module HListSplitters = struct
+ *   let z ((HCons _) as hs) = ((fun tl -> HCons ((HListSplitter.(split z hs)), tl)), HListSplitter.z)
+ *   let s n ((HCons _) as hs) =
+ *     let (f_tl, pred) = n hs in
+ *     let succ = HListSplitter.s pred in
+ *     let hs' = HListSplitter.(split succ) hs in
+ *     ((fun tl -> f_tl (HCons (hs', tl))), succ)
+ *
+ *   let splitters n hs = (fst (n hs)) HNil
+ *
+ *   (\* tests *\)
+ *   let hlist  = (HCons (1, HCons (2, HCons (3, HCons (4, HNil)))))
+ *   let once   = splitters z hlist
+ *   let twice  = splitters (s z) hlist
+ *   let thrice = splitters (s (s z)) hlist
+ *   let fourth = splitters (s (s (s z))) hlist
+ * end *)
 
 (* Second, enumerate the first n zippers into an hlist *)
 module HListZipperList = struct
@@ -188,6 +254,61 @@ module ElementWiseWrap(T: sig type 'a wrap end): (ElementWise with type 'a wrap 
       | Step: ('a typ * 'a wrap typ * ('b, 'c) proof) -> (('a * 'b), ('a wrap * 'c)) proof
   end
 
+(* Proves that all elements of an hlist are of the shape (a_i, 'f) app for a given type constructor 'f. *)
+module HElemApp1 = struct
+  (* 1st arg: the hlist type, 2nd arg: the type constructor *)
+  type (_,_) proof =
+    | Base: (unit, 'f) proof
+    | Step: ('a, 'f) proof -> (('b, 'f) app * 'a, 'f) proof
+end
+
+
+(* Elementwise project hlists of the form  <(ai, f) app> to the underlying type. *)
+(* TODO this is further generalizable *)
+module HElemProj1(N: Newtype1) = struct
+  (* ('a, b') proof iff 'a is hlist type of the form <(a_i, N.t) app> and 'b
+     is the corresponding projected hlist type <a_i N.s>. *)
+  type (_,_) proof =
+    | Base: (unit, unit) proof
+    | Step: ('a, 'b) proof -> (('c, N.t) app * 'a, 'c N.s * 'b) proof
+
+  let rec project: type a b. (a, b) proof -> a hlist -> b hlist =
+    (fun proof hlist ->
+      match (proof, hlist) with
+      | (Base, HNil) -> HNil
+      | (Step proof', HCons (x, xs)) ->
+         HCons (N.prj x, project proof' xs))
+end
+
+(* Numerals version without proof values *)
+module HElemProj1_(N: Newtype1) = struct
+  let z HNil = HNil
+  let s n (HCons (x, xs)) = HCons (N.prj x, n xs)
+  let project n hs = n hs
+end
+
+module TestMapProj = struct
+  module Identity = Newtype1(struct type 'a t = 'a end)
+
+  let id = { inj = Identity.inj }
+
+  let hlist = HCons ("1", HCons (2, HCons (3.0, HNil)))
+
+  let funs = Repeat.(s (s (s z))) id
+
+  let mapped = HListMap.(map (s (s (s z))) funs hlist)
+
+  module P = HElemProj1(Identity)
+  module P_ = HElemProj1_(Identity)
+
+  (* Proof and numeral version are essentially the same *)
+  let proj = P.(project (Step (Step (Step Base))) mapped)
+  let proj_ = P_.(project (s (s (s z))) mapped)
+end
+
+
+
+
 (* a slot exposing a generative effect, just as in our framework *)
 module type SLOT = sig
   type t
@@ -195,6 +316,7 @@ module type SLOT = sig
   val memory: t list
 end
 type 'a slot = (module SLOT with type t = 'a)
+type slot_ex = (module SLOT)
 
 let mkSlot (type s) (t: s typ) =
   (module struct
@@ -216,25 +338,30 @@ module type JOIN = sig
   (* You can construct a JOIN only if you can prove that the types are related in all of the following ways:  *)
   val p_index_joined_related: (index, joined) WrapEvt.proof
   val p_index_slot_related: (index, slots) WrapEvtSlot.proof
+
   (* Expose the slots in a hlist to enable position-dependent and type safe code generation. *)
-  val hlist: slots hlist (*   *)
+  val slot_hlist: slots hlist
+  (* hlist in existential form *)
+  val slot_list: slot_ex list
 end
 type ('a, 'b, 'c) join = (module JOIN with type index = 'a and type joined = 'b and type slots = 'c)
 
-let mkJoin (type i j s) (p_j: (i,j) WrapEvt.proof) (p_s: (i,s) WrapEvtSlot.proof) (hl: s hlist) =
+let mkJoin (type i j s) (p_j: (i,j) WrapEvt.proof) (p_s: (i,s) WrapEvtSlot.proof) (hl: s hlist) (sl: slot_ex list) =
   (module struct
      type index = i
      type joined = j
      type slots = s
      let p_index_joined_related = p_j
      let p_index_slot_related = p_s
-     let hlist = hl
+     let slot_hlist = hl
+     let slot_list = sl
    end: (JOIN with type index = i and type joined = j and type slots = s))
+
 
 (* Polyvariadic join construction, an application of the techniques in http://okmij.org/ftp/Computation/extra-polymorphism.html#poly-var,
    and Daniel Fridlender and Mia Indrika: Do We Need Dependent Types? J. Functional Programming, 2000. *)
 module PolyJoin = struct
-let z k = k (mkJoin WrapEvt.Base WrapEvtSlot.Base HNil)
+let z k = k (mkJoin WrapEvt.Base WrapEvtSlot.Base HNil [])
 let s (type a b c) n k x = n (fun (v: (a,b,c) join) ->
                              let module J = (val v) in
                              let element_typ = (tparam_of (witness x)) in
@@ -243,12 +370,12 @@ let s (type a b c) n k x = n (fun (v: (a,b,c) join) ->
                              let slot_typ = witness slot in
                              let proof_joined = WrapEvt.Step (element_typ, event_typ, J.p_index_joined_related) in
                              let proof_slots = WrapEvtSlot.Step (element_typ, slot_typ, J.p_index_slot_related) in
-                             let hlist = HCons (slot, J.hlist) in
-                             let j = mkJoin proof_joined proof_slots hlist in
+                             let slot_hlist = HCons (slot, J.slot_hlist) in
+                             let slot_ex: (module SLOT) = (Obj.magic slot) in (* surprisingly, we need to cast*)
+                             let slot_list = slot_ex :: J.slot_list in
+                             let j = mkJoin proof_joined proof_slots slot_hlist slot_list in
                              k j)
 let join n = n (fun x -> x)
-
-(* TODO: it is said that there are no universal numerals. investigate: could we do it with GADT peano numbers? *)
 
 (* tests *)
 let zero  = join z                    (* JOIN with type index = unit and type slots = unit) *)
@@ -303,7 +430,6 @@ module PolyCartesian = struct
        let cartesian = cartesianfuns
      end: (JOINCARTESIAN with type index = i and type joined = j and type slots = s and type cartesian = c))
 
-
 (* Key-issue: building the hlist of cartesian functions.
  *)
   (* let z = (PolyJoin.z, HListZipperMap.z)
@@ -315,9 +441,10 @@ module PolyCartesian = struct
    *   let zm_n = snd n in
    *   PJ.join pj_n (fun join_mod ->
    *       let module J = (val join_mod) in
-   *       (\* need to specify: for all a b c, for all n, if n is the length of a hlist type h, for all
-   *         j, s.t. a b c is the jth zipper of h, and if a b c are slot lists, we map a hlist * (b * c) hlist
-   *        to join_mod.joined list.  *\)
+   *
+   *       let cartesian_fun
+   *
+   *       (\* would like to express that cartesian_fun is polymorphic over all zippers of a type.  *\)
    *       let cartesian_fun (type a b c) (zipper: a hlist * (b slot * c) hlist) =
    *
    *       in (\* TODO: how to define this hassle-free *\)
@@ -326,7 +453,6 @@ module PolyCartesian = struct
    *       (\* mkJoinCartesian join_mod p_cartesian_sig *\)
    *       failwith "not implemented, bro"
    *     ) *)
-
 
 
 end
