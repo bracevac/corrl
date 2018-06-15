@@ -19,7 +19,7 @@ For more background information, see:
 
 At this point there are no binary releases of Koka and you need to build
 the compiler yourself. Fortunately, Koka has few dependencies and builds
-without problems on most common platforms, &eg; Windows, MacOSX, and
+without problems on most common platforms, e.g. Windows, MacOSX, and
 Unix.
 
 The following programs are required to build Koka:
@@ -35,7 +35,7 @@ Now we can build Koka itself:
 
    `> git clone https://github.com/koka-lang/koka.git`
 
-  You can also use the flag `-b dev` to get the latest development version.
+   You can also use the flag `-b dev` to get the latest development version.
 
 2. Go to the newly created Koka directory:
 
@@ -47,7 +47,7 @@ Now we can build Koka itself:
 
    If you are running on MacOSX or Unix, you may have to run this as
    ``sudo npm install`` so that the ``npm`` package manager has enough
-  permissions to install the ``jake`` and ``madoko`` tools.
+   permissions to install the ``jake`` and ``madoko`` tools.
 
 4. Finally, build the compiler and run the Koka interactive environment:
 

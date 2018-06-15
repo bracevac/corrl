@@ -67,6 +67,7 @@ module Common.NamePrim
           , nameTpAsync, nameTpAsyncX
           , nameApplyK
           , nameMakeHandler, nameMakeHandlerRet
+          , nameMakeContextTp
           , nameTpOpMatch, nameOpMatch, nameOpNoMatch
           , nameTpMDict, nameTpDict, nameTpBuilder
 
@@ -83,7 +84,7 @@ module Common.NamePrim
 
           , nameTuple, isNameTuple
 
-          , namePredHeapDiv
+          , namePredHeapDiv, namePredEffDiv
 
           -- * Kind constructors
           , nameKindStar, nameKindFun
@@ -122,6 +123,9 @@ nameUnit        = preludeName "()"
 
 namePredHeapDiv :: Name
 namePredHeapDiv = preludeName "hdiv"
+
+namePredEffDiv :: Name
+namePredEffDiv = preludeName "ediv"
 
 nameReturn :: Name
 nameReturn = preludeName ".return"
@@ -208,6 +212,8 @@ nameMakeHandler handlerSort n
   = preludeName (".make" ++ (if (not (isHandlerDeep handlerSort)) then show handlerSort else "") ++ "Handler" ++ show n)
 nameMakeHandlerRet n
   = preludeName (".makeHandlerRet" ++ show n)
+
+nameMakeContextTp n = preludeName ("resume-context" ++ (if (n==0) then "" else "1"))
 
 nameMakeNull    = preludeName ".null-any"
 nameConstNull   = preludeName "null-const"
