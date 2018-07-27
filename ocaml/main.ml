@@ -84,9 +84,12 @@ module type JOIN = sig
 end
 
 (*lame! can we have a nice arity-abstracting join definition for any n?*)
-module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with type joined = T.t0 evt * T.t1 evt * T.t2 evt * T.t3 evt
-                                                                             and type input = T.t0 evt r * T.t1 evt r * T.t2 evt r * T.t3 evt r
-                                                                             and type result = T.result evt)
+module Join4(T: sig type t0 type t1 type t2 type t3 type result end):
+(JOIN with type joined = T.t0 evt * T.t1 evt * T.t2 evt * T.t3 evt
+
+       and type input = T.t0 evt r * T.t1 evt r * T.t2 evt r * T.t3 evt r
+
+       and type result = T.result evt)
   = struct
   module S0 = Slot(struct type t = T.t0 evt end)
   module S1 = Slot(struct type t = T.t1 evt end)
@@ -128,7 +131,7 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
     let shuffle2 (x,y,z,w) = (y,z,x,w)
     let shuffle3 (x,y,z,w) = (y,z,w,x)
 
-    (* GC the dead events all mailboxes. *)
+    (* GC the dead events in all mailboxes. *)
     let cleanup () =
       Array.iter (fun (slot : (module SLOT)) ->
           let module S = (val slot) in
@@ -149,6 +152,9 @@ module Join4(T: sig type t0 type t1 type t2 type t3 type result end): (JOIN with
      slots S_k, where k =/= i. The typical use case is interpreting the
      S_i.Push effect: Compute the collection cartesian_i and pass its
      elements to the Complete effect, i.e., trigger the pattern body. *)
+
+ (*  <list[a1]...list[ai-1], ai, list[ai+1]...list[an] -> list[a1 * ... * an]    *)
+
   let cartesian0: (S0.t * Count.t ref) -> joined list =
     (_cart shuffle0 S1.getMail S2.getMail S3.getMail)
   let cartesian1: (S1.t * Count.t ref) -> joined list =

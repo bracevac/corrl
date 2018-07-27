@@ -5,6 +5,20 @@
 type z = Z : z
 type 'n s = S : 'n -> 'n s
 
+module type NUM_ = sig
+  type 'a zero
+  type 'a succ
+
+  type _ num =
+    | Zero: 'a -> ('a zero) num
+    | Succ: 'a num -> ('a succ) num
+
+
+  val z: 'a -> 'a zero
+
+
+end
+
 (* Church numeral algebra *)
 module type NUM = sig
   type ('a, 'b) num

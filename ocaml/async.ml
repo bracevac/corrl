@@ -148,6 +148,8 @@ let interleaved thunks =
     in
     Array.iter (fun thunk ->
         Delimcont.reset (fun () ->
+            (* intercept_async (terminator (suspendable thunk))  *)
+            (* intercept_async (suspendable (terminator thunk))   *)
             intercept_async (terminator thunk)))
       thunks;
     while (!count > 0) do

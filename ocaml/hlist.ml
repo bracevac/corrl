@@ -1,3 +1,5 @@
+#use "topfind";;
+#require "higher";;
 
 open Higher
 
@@ -307,7 +309,7 @@ module TestMapProj = struct
 end
 
 
-
+List.[]
 
 (* a slot exposing a generative effect, just as in our framework *)
 module type SLOT = sig
@@ -419,7 +421,7 @@ type ('a, 'b, 'c, 'd) join_cartesian =
   (module JOINCARTESIAN with type index = 'a and type joined = 'b and type slots = 'c and type cartesian = 'd)
 
 module PolyCartesian = struct
-  let mkJoinCartesian (type i j s c) (join: (i,j,s) join)
+  let mk (type i j s c) (join: (i,j,s) join)
         (p_c: (i,c,j list) CartesianSigSpec.proof) (cartesianfuns: c hlist)
     =
     let module J = (val join) in

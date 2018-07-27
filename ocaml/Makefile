@@ -1,4 +1,4 @@
-EXE := main.native main.byte 
+EXE := hlist2.byte main.native main.byte
 
 TEST := $(patsubst %.ml,%.native,$(wildcard test*.ml)) $(patsubst %.ml,%.byte,$(wildcard test*.ml))
 
@@ -9,10 +9,10 @@ test%.byte: test%.ml
 	ocamlbuild -cflag -g -lflag -g -pkg unix $@
 
 %.native: %.ml
-	ocamlbuild -cflag -g -pkg unix $@
+	ocamlbuild -cflag -g -pkg unix -pkg higher $@
 
 %.byte: %.ml
-	ocamlbuild -cflag -g -lflag -g -pkg unix $@
+	ocamlbuild -cflag -g -lflag -g -pkg unix -pkg higher $@
 
 .PHONY: clean
 clean:
