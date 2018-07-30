@@ -49,6 +49,8 @@ module HListRev = struct
   let gen_rev = function
     | Proof aux -> gen_rev_aux aux HNil
 
+  let test = gen_rev (Proof (AStep (AStep ABase)))
+
   (* This is a non-solution, we need to quantify the variables the the *right* of the aux argument.
      aux values should actually quantify over all possible (a, b, c). Can we do this by turning aux into
      a module type? *)
@@ -57,7 +59,7 @@ module HListRev = struct
 
   (* Code generation version: *)
   (* let rec gen_rev_aux_code: type a b c. (a, b, c) aux -> b hlist code -> (a hlist -> c hlist) code =
-   *   function
+   *   function (\* TODO we could even get rid of the intermediate function calls *\)
    *   | ABase -> fun acc -> .<(fun HNil -> .~(acc))>.
    *   | AStep n ->
    *      let next = gen_rev_aux_code n in
@@ -166,6 +168,7 @@ let mkJoin (type i j s)
    and Daniel Fridlender and Mia Indrika: Do We Need Dependent Types? J. Functional Programming, 2000. *)
 module PolyJoin = struct (* TODO should we have an uncurried variant? *)
   let z k = k (mkJoin WrapEvt.Base WrapEvtSlot.Base)
+
   let s (type a b c) n k element_typ =
     n (fun (v: (a, b, c) join) ->
         let module J = (val v) in
@@ -175,6 +178,8 @@ module PolyJoin = struct (* TODO should we have an uncurried variant? *)
         let proof_slots = WrapEvtSlot.Step (element_typ, slot_typ, J.p_index_slot_rel) in
         let j = mkJoin proof_joined proof_slots in
         k j)
+
+  (* TODO: complete end-to-end example  *)
 
   let mk n = n (fun x -> x)
 
@@ -257,17 +262,12 @@ module JoinsImpl(T: JOIN) = struct
                       try action () with
                       | effect (S.Push v) k ->
                          let x = List.find (fun (ev,_) -> ev = v) (S.getMail ()) in
-                         (* forkEach trigger (cartesian0 x); TODO *)
+                          (* forkEach trigger (cartesian0 x); TODO *)
                          gc ();
                          continue k ()))
 
     type slot_zipper = ((module SLOT) list * (module SLOT) * (module SLOT) list)
     let slots_zippers = Lists.zippers slots
-
-    module type Exists = sig
-      type t
-      val value: t
-    end
 
     module WrapCount = ElementWiseWrap(struct type 'a wrap = 'a * (Count.t ref) end)
     module WrapList = ElementWiseWrap(struct type 'a wrap = 'a list end)
@@ -310,12 +310,6 @@ module JoinsImpl(T: JOIN) = struct
                             (joined',rjoined', unit) CartesianRec.proof ->
                             unit = (*TODO FIX*)
       (fun i proof proof' rproof cart_proof ->
-        (*  We need to distinguish the ith slot from the others, hence the zipper.
-            Overall, we generate a function that, given the ith event and its life counter,
-            Computes nested flatMaps (=cartesian product) over the other slots's memory lists:
-            (ti evt * Count.t) -> (t1 evt * ... * tn evt) list
-           *)
-        let zipper = List.nth slots_zippers i in
         let lives_list = gen_lives_list proof' in
         let unwrap = gen_unwrap proof' in
         (* This function is the innermost layer of the nested cartesian product. It yields an admissible tuple,
@@ -334,9 +328,8 @@ module JoinsImpl(T: JOIN) = struct
             else [])
         in
 
-        let flatMap' l f = flatMap f l in
-
-        let rec gen: type a al ctx. (joined',a,ctx) CartesianRec.proof ->
+        (* Step 1: cartesian product accepting n lists, note that lists must be supplied in reverse order n..1*)
+        let rec cart: type a al ctx. (joined',a,ctx) CartesianRec.proof ->
                       (a,al) WrapList.proof ->
                       al hlist ->
                       ctx hlist -> (joined hlist) list =
@@ -345,13 +338,30 @@ module JoinsImpl(T: JOIN) = struct
             | CartesianRec.Base, WrapList.Base, HNil ->
                (yield)
             | CartesianRec.(Step cnext), WrapList.(Step (_,_,wnext)), HCons (mbox, ms) ->
-               let next = gen cnext wnext ms in
+               let next = cart cnext wnext ms in
                (fun ctx ->
                  Lists.flatMap mbox (fun x -> next (HCons (x, ctx)))))
-        in ()  )
+        in
+        (* Step 2: generate the function that given a new event from the ith input, obtains all the
+           mailboxes to feed to the cart implementation (in *reverse* order n .. 1)):
+
+           fun p: (ti evt * Count.t ref) ->
+               (mailbox Sn, ..., mailbox S(i+1), [p], mailbox S(i-1), ..., mailbox S1 ) *)
+        (*  We need to distinguish the ith slot from the others, hence the zipper.
+            Overall, we generate a function that, given the ith event and its life counter,
+            Computes nested flatMaps (=cartesian product) over the other slots's memory lists:
+            (ti evt * Count.t) -> (t1 evt * ... * tn evt) list
+           *)
+        let zipper = List.nth slots_zippers i in
+        let callback i = ()
+        in () (* TODO should intuitively be callback i (gen i) *)
+
+      )
 
 
     (*
+      TODO: sales pitch
+
       What we would like to generate for arbitrary number n of input lists:
       let _cartesian3 f lst1 lst2 lst3 =
           flatMap lst1
@@ -416,7 +426,7 @@ module JoinsImpl(T: JOIN) = struct
        mbox :: ms ->
        let f = recurse ms
        (fun ctx ->
-          flatMap mbox (fun x -> f :: ctx)))
+          flatMap mbox (fun x -> f (x :: ctx)))
 
        Signature:
 
