@@ -52,13 +52,13 @@ module HListRev = struct
   (* This is a non-solution, we need to quantify the variables the the *right* of the aux argument.
      aux values should actually quantify over all possible (a, b, c). Can we do this by turning aux into
      a module type? *)
-  type poly_gen = { poly_gen_rev: 'a 'b 'c. ('a, 'b, 'c) aux -> 'b hlist -> 'a hlist -> 'c hlist }
-  let poly_gen = { poly_gen_rev = (gen_rev_aux) }
+  (* type poly_gen = { poly_gen_rev: 'a 'b 'c. ('a, 'b, 'c) aux -> 'b hlist -> 'a hlist -> 'c hlist }
+   * let poly_gen = { poly_gen_rev = (gen_rev_aux) } *)
 
-  (* (\* Code generation version: *\)
-   * let rec gen_rev_aux_code: type a b c. (a, b, c) aux -> b hlist code -> (a hlist -> c hlist) code =
+  (* Code generation version: *)
+  (* let rec gen_rev_aux_code: type a b c. (a, b, c) aux -> b hlist code -> (a hlist -> c hlist) code =
    *   function
-   *   | ABase -> (fun acc -> .<(fun hs -> .~(acc))>.)
+   *   | ABase -> fun acc -> .<(fun HNil -> .~(acc))>.
    *   | AStep n ->
    *      let next = gen_rev_aux_code n in
    *      fun acc ->
