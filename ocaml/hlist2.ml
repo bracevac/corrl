@@ -22,7 +22,10 @@ end
 
 open HList
 
-(* This can be generalized to a general accumulator-style recursion scheme functor *)
+(* HList reversal perhaps is the simplest instance
+   of the general problem: Statically, we do not know how many elements there are, until
+   we concretely instantiate. Writing accumulator-style definitions resp. top-down flow becomes
+   difficult to type in HM. We expand on this issue at the bottom of the file. *)
 module HListRev = struct
   type (_,_,_) aux =
     | ABase: (unit, 'acc, 'acc) aux
@@ -45,6 +48,26 @@ module HListRev = struct
   (* TODO: the generated function is *monomorphic*, can we obtain a polymorphic version using records?  *)
   let gen_rev = function
     | Proof aux -> gen_rev_aux aux HNil
+
+  (* This is a non-solution, we need to quantify the variables the the *right* of the aux argument.
+     aux values should actually quantify over all possible (a, b, c). Can we do this by turning aux into
+     a module type? *)
+  type poly_gen = { poly_gen_rev: 'a 'b 'c. ('a, 'b, 'c) aux -> 'b hlist -> 'a hlist -> 'c hlist }
+  let poly_gen = { poly_gen_rev = (gen_rev_aux) }
+
+  (* (\* Code generation version: *\)
+   * let rec gen_rev_aux_code: type a b c. (a, b, c) aux -> b hlist code -> (a hlist -> c hlist) code =
+   *   function
+   *   | ABase -> (fun acc -> .<(fun hs -> .~(acc))>.)
+   *   | AStep n ->
+   *      let next = gen_rev_aux_code n in
+   *      fun acc ->
+   *        .<(fun hs ->
+   *            let (HCons (x, xs)) = hs in
+   *            .~(next .<(HCons (x, .~(acc)))>.) xs)>. (\* TODO need to make hlist external *\)
+   *
+   * let gen_rev_code = function
+   *   | Proof aux -> gen_rev_aux_code aux .<HNil>. *)
 end
 
 
@@ -296,7 +319,7 @@ module JoinsImpl(T: JOIN) = struct
         let lives_list = gen_lives_list proof' in
         let unwrap = gen_unwrap proof' in
         (* This function is the innermost layer of the nested cartesian product. It yields an admissible tuple,
-           if all compontents have non-zero life times:
+           if all components have non-zero life times:
            (t1 evt * Count.t ref) * ... * (tn evt * Count.t ref) -> (t1 evt * ... * tn evt) list
          *)
         let yield: joined' hlist -> (joined hlist) list = (fun tuple ->
@@ -329,6 +352,23 @@ module JoinsImpl(T: JOIN) = struct
 
 
     (*
+      What we would like to generate for arbitrary number n of input lists:
+      let _cartesian3 f lst1 lst2 lst3 =
+          flatMap lst1
+                  (fun (x,xc) ->
+                       flatMap lst2
+                               (fun (y,yc) ->
+                                    flatMap lst3
+                                    (fun (z,zc) -> (* note that the context grows downwards *)
+                                         let lives = [xc;yc;zc] in
+                                         if (List.for_all (fun r -> Count.lt_i 0 !r) lives)
+                                         then
+                                           begin
+                                             List.iter (fun r -> r := Count.dec !r) lives;
+                                             [(x,y,z)]
+                                           end
+                                         else [])))
+
        We recurse on reverse of joined':
 
        Base: (unit, joined', joined' -> (joined hlist) list)
@@ -340,9 +380,9 @@ module JoinsImpl(T: JOIN) = struct
        context/accumulator:
 
        Base: (unit, joined')
-       Step: (b, a * c) -> (a * b, c)
+       Step: (b, a * ctx) -> (a * b, ctx)
 
-       Return type is c -> (joined hlist) list
+       Return type is ctx -> (joined hlist) list
 
        However, this does not have to be the case in general. For example, in
        HListRev, we need to propagate the result from the bottom up.
@@ -352,6 +392,8 @@ module JoinsImpl(T: JOIN) = struct
        Step:  (b, (a, c) acc, r) -> (a * b, c, (c , r) res)
 
        where bot: * -> *, acc: * x * -> *, res: * x * -> *.
+       Note: you *cannot* write a GADT like this, OCaml will reject the '(c,r) res'
+       application in the output of Step.
 
        In the case of list reversion, the instance would be:
             a bot := a,
