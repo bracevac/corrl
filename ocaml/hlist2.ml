@@ -1,7 +1,7 @@
-#use "topfind";;
-#mod_use "utility.ml";;
-#mod_use "handlers.ml";;
-#mod_use "count.ml";;
+(* #use "topfind";;
+ * #mod_use "utility.ml";;
+ * #mod_use "handlers.ml";;
+ * #mod_use "count.ml";; *)
 
 open Utility
 open Handlers
@@ -106,7 +106,7 @@ let slot_typ : 'a typ -> 'a slot typ = (fun _ -> Typ)
 module type ElementWise = sig
   type 'a wrap
   (* (t,u) proof iff t and u are hlist phantom types (i.e. nested tuple types)
-     with (1) same length and (2) u_i = t_i wrao, i.e., u is type constructor (_ wrap) applied to t elementwise.   *)
+     with (1) same length and (2) u_i = t_i wrap, i.e., u is type constructor (_ wrap) applied to t elementwise.   *)
   type (_, _) proof =
     | Base: (unit, unit) proof
     | Step: ('a typ * 'a wrap typ * ('b, 'c) proof) -> (('a * 'b), ('a wrap * 'c)) proof
@@ -274,35 +274,26 @@ module JoinsImpl(T: JOIN) = struct
     module WrapCount = ElementWiseWrap(struct type 'a wrap = 'a * (Count.t ref) end)
     module WrapList = ElementWiseWrap(struct type 'a wrap = 'a list end)
 
-    (* Extract life time counters from hlist of ('a * Count.t) pairs. TODO: functions could be eliminated with staging  *)
-    let rec gen_lives_list: type j j'. (j, j') WrapCount.proof -> j' hlist -> (Count.t ref) list =
+    (* unzip events paired with their life time counters. TODO: functions could be eliminated with staging  *)
+    let rec gen_unzip: type j j'. (j, j') WrapCount.proof -> j' hlist -> (j hlist * ((Count.t ref) list)) =
       fun proof ->
         match proof with
         | WrapCount.Base ->
            (function
-            | HNil -> [])
+            | HNil -> (HNil, []))
         | WrapCount.Step (_,_,rest) ->
-           let ftail = gen_lives_list rest in
+           let ftail = gen_unzip rest in
            (function
-            | HCons ((_,c), hs) -> c :: (ftail hs))
+            | HCons ((evt,c), hs) ->
+               let (etail, ctail) = ftail hs in
+               ((HCons (evt, etail)), (c :: ctail)))
 
-    let rec gen_unwrap: type j j'. (j, j') WrapCount.proof -> j' hlist -> j hlist =
-      fun proof ->
-        match proof with
-        | WrapCount.Base ->
-           (function
-            | HNil -> HNil)
-        | WrapCount.Step (_,_,rest) ->
-           let ftail = gen_unwrap rest in
-           (function
-            | HCons((evt,_), hs) -> HCons (evt, ftail hs))
-
+    (* Encodes the recursion scheme of the nested cartesian product calculation (discussion at bottom) *)
     module CartesianRec = struct
       type ('res,_,_) proof = (* TODO factor out res *)
         | Base:  ('res, unit, 'res) proof
         | Step:  ('res, 'b, 'a * 'c) proof -> ('res, 'a * 'b, 'c) proof
      end
-
 
     let gen_cartesian: type index joined joined' rjoined'. (* TODO the params seem redundant, since we can access SIG *)
                             int ->
@@ -312,15 +303,13 @@ module JoinsImpl(T: JOIN) = struct
                             (joined',rjoined', unit) CartesianRec.proof ->
                             unit = (*TODO FIX*)
       (fun i proof proof' rproof cart_proof ->
-        let lives_list = gen_lives_list proof' in
-        let unwrap = gen_unwrap proof' in
+        let unzip = gen_unzip proof' in
         (* This function is the innermost layer of the nested cartesian product. It yields an admissible tuple,
            if all components have non-zero life times:
            (t1 evt * Count.t ref) * ... * (tn evt * Count.t ref) -> (t1 evt * ... * tn evt) list
          *)
         let yield: joined' hlist -> (joined hlist) list = (fun tuple ->
-            let lives = lives_list tuple in
-            let events = unwrap tuple in
+            let (events, lives) = unzip tuple in
             if (List.for_all (fun r -> Count.lt_i 0 !r) lives)
             then
               begin
