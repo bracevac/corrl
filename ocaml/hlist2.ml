@@ -57,19 +57,23 @@ module HListRev = struct
   (* type poly_gen = { poly_gen_rev: 'a 'b 'c. ('a, 'b, 'c) aux -> 'b hlist -> 'a hlist -> 'c hlist }
    * let poly_gen = { poly_gen_rev = (gen_rev_aux) } *)
 
-  (* Code generation version: *)
-  (* let rec gen_rev_aux_code: type a b c. (a, b, c) aux -> b hlist code -> (a hlist -> c hlist) code =
-   *   function (\* TODO we could even get rid of the intermediate function calls *\)
-   *   | ABase -> fun acc -> .<(fun HNil -> .~(acc))>.
-   *   | AStep n ->
-   *      let next = gen_rev_aux_code n in
-   *      fun acc ->
-   *        .<(fun hs ->
-   *            let (HCons (x, xs)) = hs in
-   *            .~(next .<(HCons (x, .~(acc)))>.) xs)>. (\* TODO need to make hlist external *\)
-   *
-   * let gen_rev_code = function
-   *   | Proof aux -> gen_rev_aux_code aux .<HNil>. *)
+  (* Code generation version, for simplicity, we use nested pairs instead of hlist *)
+  let gen_rev_aux_code: type a b. (a, unit, b) aux -> (a -> b) code =
+    fun aux ->
+    begin   (* Exercise: Is it possible to generate just one deep pattern match? *)
+      let rec helper: type a b c. (a,b,c) aux -> b code -> a code -> c code =
+        (function
+         | ABase -> (fun acc _ -> acc)
+         | AStep n ->
+            (fun acc hs ->
+              .<let (x, xs) = .~(hs)
+                    in .~(helper n .<(x, .~(acc))>. .<xs>. ) >.))
+      in
+      .<fun hs -> .~(helper aux .<()>. .<hs>.)>.
+    end
+
+  let gen_rev_code = function
+    | Proof aux -> gen_rev_aux_code aux
 end
 
 
@@ -178,8 +182,6 @@ module PolyJoin = struct (* TODO should we have an uncurried variant? *)
         let proof_slots = WrapEvtSlot.Step (element_typ, slot_typ, J.p_index_slot_rel) in
         let j = mkJoin proof_joined proof_slots in
         k j)
-
-  (* TODO: complete end-to-end example  *)
 
   let mk n = n (fun x -> x)
 
@@ -361,6 +363,7 @@ module JoinsImpl(T: JOIN) = struct
 
     (*
       TODO: sales pitch
+      TODO: complete end-to-end example
 
       What we would like to generate for arbitrary number n of input lists:
       let _cartesian3 f lst1 lst2 lst3 =
