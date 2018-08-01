@@ -1,7 +1,7 @@
-(* #use "topfind";;
- * #mod_use "utility.ml";;
- * #mod_use "handlers.ml";;
- * #mod_use "count.ml";; *)
+#use "topfind";;
+#mod_use "utility.ml";;
+#mod_use "handlers.ml";;
+#mod_use "count.ml";;
 
 open Utility
 open Handlers
@@ -34,6 +34,13 @@ module HListRev = struct
   type (_,_) proof =
     | Proof: ('a, unit, 'b) aux -> ('a, 'b) proof
 
+  module type Exists = sig
+    type input
+    type rev
+    val proof: (input, rev) proof
+  end
+  type 'a exists = (module Exists with type input = 'a)
+
   (* General pattern: we generate functions from proof GADTs. Proof values do not occur in the
      generated function. That is, we have a clear separation of stages between DSL type checking/code generation
      and actual run time.  *)
@@ -62,12 +69,12 @@ module HListRev = struct
     fun aux ->
     begin   (* Exercise: Is it possible to generate just one deep pattern match? *)
       let rec helper: type a b c. (a,b,c) aux -> b code -> a code -> c code =
-        (function
+        function
          | ABase -> (fun acc _ -> acc)
          | AStep n ->
             (fun acc hs ->
               .<let (x, xs) = .~(hs)
-                    in .~(helper n .<(x, .~(acc))>. .<xs>. ) >.))
+                    in .~(helper n .<(x, .~(acc))>. .<xs>. ) >.)
       in
       .<fun hs -> .~(helper aux .<()>. .<hs>.)>.
     end
@@ -122,6 +129,7 @@ module ElementWiseWrap(T: sig type 'a wrap end): (ElementWise with type 'a wrap 
   end
 
 (* Idea: seems we could replace all the GADTs with final tagless encodings *)
+module WrapId = ElementWiseWrap(struct type 'a wrap = 'a end)
 module WrapEvtSlot = ElementWiseWrap(struct type 'a wrap = 'a evt slot end)
 module WrapEvt = ElementWiseWrap(struct type 'a wrap = 'a evt end)
 module WrapTyp = ElementWiseWrap(struct type 'a wrap = 'a typ end)
@@ -229,12 +237,20 @@ module Gen = struct
      end: (SLOT with type t = s))
 
   (* Generate slot binding from proofs *)
-  let rec mkSlots: type i s. (i,s) WrapEvtSlot.proof -> (module SLOT) list =
-    (function
-     | WrapEvtSlot.Base -> []
-     | WrapEvtSlot.Step (_, evidence, rest) ->
-        (* Surprisingly, we have to cast here *)
-        (Obj.magic (mkSlot evidence)) :: (mkSlots rest))
+  let rec mkSlots: type i s. (i,s) WrapEvtSlot.proof -> s hlist =
+    let evt_from_slot: type a. (module SLOT with type t = a evt) typ -> a evt typ = (fun _ -> Typ) in
+    function
+    | WrapEvtSlot.Base -> HNil
+    | WrapEvtSlot.Step (_, evidence, rest) ->
+       HCons ((mkSlot (evt_from_slot evidence)), (mkSlots rest))
+
+  (* Forget the element types of a slot hlist *)
+  let rec existentialize: type i s. (i,s) WrapEvtSlot.proof -> s hlist -> (module SLOT) list =
+    function
+    | WrapEvtSlot.Base -> (fun HNil -> [])
+    | WrapEvtSlot.Step (_, _, rest) ->
+       let ex_tl = existentialize rest in
+       (fun (HCons (s, hs)) -> (Obj.magic s) :: (ex_tl hs))
 end
 
 module JoinsImpl(T: JOIN) = struct
@@ -242,9 +258,10 @@ module JoinsImpl(T: JOIN) = struct
   effect Trigger: T.joined hlist -> unit
   let trigger v = perform (Trigger v)
 
-  let slots: (module SLOT) list = Gen.mkSlots T.p_index_slot_rel
+  let slots: T.slots hlist = Gen.mkSlots T.p_index_slot_rel
+  let slots_u: (module SLOT) list = Gen.existentialize T.p_index_slot_rel slots
 
-  let forAll = gen_handlers slots (fun i (s: (module SLOT)) ->
+  let forAll = gen_handlers slots_u (fun i (s: (module SLOT)) ->
                    let module S = (val s) in
                    (fun action ->
                      try action () with
@@ -254,7 +271,7 @@ module JoinsImpl(T: JOIN) = struct
 
   module Cartesian = struct
     let gc () = failwith "not implemented"
-    let reify = gen_handlers slots (fun i (s: (module SLOT)) ->
+    let reify = gen_handlers slots_u (fun i (s: (module SLOT)) ->
                     let module S = (val s) in
                     (* TODO can we use MetaOCaml's first-class pattern matching to
                        eliminate the overhead from thunks? In the end, we really
@@ -269,7 +286,7 @@ module JoinsImpl(T: JOIN) = struct
                          continue k ()))
 
     type slot_zipper = ((module SLOT) list * (module SLOT) * (module SLOT) list)
-    let slots_zippers = Lists.zippers slots
+    let slots_zippers = Lists.zippers slots_u
 
     module WrapCount = ElementWiseWrap(struct type 'a wrap = 'a * (Count.t ref) end)
     module WrapList = ElementWiseWrap(struct type 'a wrap = 'a list end)
@@ -295,6 +312,8 @@ module JoinsImpl(T: JOIN) = struct
         | Step:  ('res, 'b, 'a * 'c) proof -> ('res, 'a * 'b, 'c) proof
      end
 
+
+
     let gen_cartesian: type index joined joined' rjoined'. (* TODO the params seem redundant, since we can access SIG *)
                             int ->
                             (index, joined) WrapEvt.proof ->
@@ -306,8 +325,7 @@ module JoinsImpl(T: JOIN) = struct
         let unzip = gen_unzip proof' in
         (* This function is the innermost layer of the nested cartesian product. It yields an admissible tuple,
            if all components have non-zero life times:
-           (t1 evt * Count.t ref) * ... * (tn evt * Count.t ref) -> (t1 evt * ... * tn evt) list
-         *)
+           (t1 evt * Count.t ref) * ... * (tn evt * Count.t ref) -> (t1 evt * ... * tn evt) list *)
         let yield: joined' hlist -> (joined hlist) list = (fun tuple ->
             let (events, lives) = unzip tuple in
             if (List.for_all (fun r -> Count.lt_i 0 !r) lives)
@@ -319,7 +337,7 @@ module JoinsImpl(T: JOIN) = struct
             else [])
         in
 
-        (* Step 1: cartesian product accepting n lists, note that lists must be supplied in reverse order n..1*)
+        (* Step 1: cartesian product accepting n lists, note that lists must be supplied in reverse order n..1 *)
         let rec cart: type a al ctx. (joined',a,ctx) CartesianRec.proof ->
                       (a,al) WrapList.proof ->
                       al hlist ->
