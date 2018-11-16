@@ -382,8 +382,6 @@ module Tests = struct
   let interleave3 = interleaved_bind slots3 reacts3
   let interleave4 = interleaved_bind slots4 reacts4
 
-
-  (* These could be generated with appropriate Fridlender & Indrika numerals. *)
   module Three = (val DSL.mkJoinSig slots3)
   module Four = (val DSL.mkJoinSig slots4)
   module Join3 = JoinShape(Three)
