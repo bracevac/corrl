@@ -158,6 +158,9 @@ module Reacts = struct
 end
 module Events = HList(struct type 'a t = 'a evt end)
 
+type _ typ = Typ: 'a typ
+let witness: type a. a -> a typ = (fun _ -> Typ)
+let elem_typ: type a. a list typ -> a typ = (fun _ -> Typ)
 (* a slot exposing a generative effect, just as in our framework *)
 module type SLOT = sig
   type t
@@ -171,7 +174,7 @@ end
 type 'a slot = (module SLOT with type t = 'a)
 type slot_ex = (module SLOT)
 (* Create a slot instance from a value witnessing the type. *)
-let mkSlot (type s) (t: s) =
+let mk_slot (type s) (t: s typ) =
   (module struct
      type t = s
      effect Push: t -> unit
@@ -181,6 +184,7 @@ let mkSlot (type s) (t: s) =
      effect SetMail: t list -> unit
      let setMail v = perform (SetMail v)
    end: (SLOT with type t = s))
+let mkSlot (type s) (t: s) = mk_slot (witness t)
 
 module ListDrefs = struct
   include HList(struct type 'a t = unit -> 'a list end)
@@ -210,8 +214,9 @@ end
 (* We assume this will be generated from user query. *)
 module type JOIN = sig
   type index
-  val slots: index Slots.hlist
+  val slots: index Slots.hlist (* TODO do we really need slots here? Could it be not generated later on demand? *)
 end
+type 'a join_sig = (module JOIN with type index = 'a)
 
 (* Arity generic join implementation. *)
 module JoinShape(J: JOIN) = struct
@@ -233,8 +238,7 @@ module JoinShape(J: JOIN) = struct
                    (fun action ->
                      try action () with
                      | effect (S.GetMail) k -> continue k !mem
-                     | effect (S.SetMail l) k -> mem := l; continue k ()
-                   ))
+                     | effect (S.SetMail l) k -> mem := l; continue k ()))
 
   (* Default behavior: enqueue each observed event notification in the corresponding mailbox. *)
   let forAll = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
@@ -281,6 +285,34 @@ let interleaved_bind: type a. a Slots.hlist -> a Reacts.hlist -> unit -> unit =
       fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs))) (* TODO: generate the array right away *)
 
 
+module DSL = struct
+  let mkJoinSig: type a. a Slots.hlist -> a join_sig =
+    (fun slots ->
+      (module struct
+         type index = a
+         let slots = slots
+       end: (JOIN with type index = a)))
+
+  let z k = k (Slots.nil, Reacts.nil)
+  let s n k react =
+    n (fun (slots, reacts) ->
+        let slot = mk_slot (elem_typ (witness react)) in
+        k (Slots.(cons slot slots), Reacts.(cons react reacts)))
+
+  let zero  () = z
+  let one   () = (s z)
+  let two   () = (s (s z))
+  let three () = (s (s (s z)))
+
+  let correlate (type a) n =
+    let open Handlers in
+    n (fun ((slots,reacts): (a Slots.hlist * a Reacts.hlist)) ->
+        let j = mkJoinSig slots in
+        let module JSig = (val j) in
+        let streams = interleaved_bind slots reacts in
+        let module JoinN = JoinShape(JSig) in
+        (Async.run |+| JoinN.run) streams)
+end
 
 
 (* let mkJoin (type i j s)
