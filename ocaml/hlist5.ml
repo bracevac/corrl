@@ -390,25 +390,16 @@ module Tests = struct
   module Join4 = JoinShape(Four)
 
   let show3 action =
+    let open Events in
     try action () with
-    | effect (Join3.Trigger _) k ->
-       continue k (Printf.printf "trigger\n")
+    | effect (Join3.Trigger (S (i, S (s, S (f, Z))))) k ->
+       continue k (Printf.printf "(%d,%s,%2.1f)\n" i s f)
 
   let show4 action =
+    let open Events in
     try action () with
-    | effect (Join4.Trigger _) k ->
-       continue k (Printf.printf "trigger\n")
-
-  (* let show3 action =
-   *   try action () with
-   *   | effect (Join3.Trigger (i, (s, (f, ())))) k ->
-   *      continue k (Printf.printf "(%d,%s,%2.1f)\n" i s f)
-   *
-   * let show4 action =
-   *   try action () with
-   *   | effect (Join4.Trigger (c, (i, (s, (f, ()))))) k ->
-   *      continue k (Printf.printf "(%c,%d,%s,%2.1f)\n" c i s f) *)
-
+    | effect (Join4.Trigger (S (c, S (i, S (s, S (f, Z)))))) k ->
+       continue k (Printf.printf "(%c,%d,%s,%2.1f)\n" c i s f)
 
   let test_join3 () =
     let open Handlers in
