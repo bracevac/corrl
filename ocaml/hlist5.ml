@@ -97,7 +97,10 @@ Error: This expression has type int but an expression was expected of type
          bool
 *)
 
-(* HList of lists *)
+(* HList of lists TODO: fix *)
+module ListHList(T: sig type 'a t end) = struct
+  include HList(struct type 'a t = 'a T.t list end)
+end
 
 module HLL = HList(struct type 'a t = 'a list end)
 
@@ -147,9 +150,10 @@ module Handlers = struct
   let gen list f = comp (List.mapi f list)
 end
 
-(* Emulates type constructors in our framework *)
-type 'a react = 'a list
+(* Emulates type constructors in our framework: TODO change to real type *)
 type 'a evt = 'a
+type 'a react = 'a evt list
+type 'a mailbox = 'a evt list
 module Reacts = struct
   include HList(struct type 'a t = 'a react end)
   let rec eat f = function (* TODO needs to change to proper stream type *)
@@ -164,12 +168,12 @@ let elem_typ: type a. a list typ -> a typ = (fun _ -> Typ)
 (* a slot exposing a generative effect, just as in our framework *)
 module type SLOT = sig
   type t
-  effect Push: t -> unit
-  val push: t -> unit
-  effect GetMail: t list (* TODO: change to the real mailbox type *)
-  val getMail: unit -> t list
-  effect SetMail: t list -> unit
-  val setMail: t list -> unit
+  effect Push: t evt -> unit
+  val push: t evt -> unit
+  effect GetMail: t mailbox (* TODO: change to the real mailbox type *)
+  val getMail: unit -> t mailbox
+  effect SetMail: t mailbox -> unit
+  val setMail: t mailbox -> unit
 end
 type 'a slot = (module SLOT with type t = 'a)
 type slot_ex = (module SLOT)
@@ -177,21 +181,30 @@ type slot_ex = (module SLOT)
 let mk_slot (type s) (t: s typ) =
   (module struct
      type t = s
-     effect Push: t -> unit
+     effect Push: t evt -> unit
      let push v = perform (Push v)
-     effect GetMail: t list
+     effect GetMail: t mailbox
      let getMail () = perform GetMail
-     effect SetMail: t list -> unit
+     effect SetMail: t mailbox -> unit
      let setMail v = perform (SetMail v)
    end: (SLOT with type t = s))
 let mkSlot (type s) (t: s) = mk_slot (witness t)
 
-module ListDrefs = struct
-  include HList(struct type 'a t = unit -> 'a list end)
-  let rec force: type a. a hlist -> a HLL.hlist =
+module Mailboxes = struct
+  include HList(struct type 'a t = 'a mailbox end)
+  let rec cart : type w r. r hlist -> (r Events.hlist -> w list) -> w list = fun h f ->
+    match h with
+    | Z -> f Events.nil
+    | S (ls,h) ->
+       List.concat @@ List.map (fun x -> cart h (fun xs -> f Events.(cons x xs))) ls
+end
+
+module MailboxDrefs = struct
+  include HList(struct type 'a t = unit -> 'a mailbox end)
+  let rec force: type a. a hlist -> a Mailboxes.hlist =
     function
-    | Z -> HLL.nil
-    | S (thunk,ts) -> HLL.cons (thunk ()) (force ts)
+    | Z -> Mailboxes.nil
+    | S (thunk,ts) -> Mailboxes.cons (thunk ()) (force ts)
 end
 
 module Slots = struct
@@ -203,18 +216,19 @@ module Slots = struct
     | S (slot,hs) -> (Obj.magic slot) :: (abstract hs) (* It's weird that a cast is required in this scenario. *)
 
   (* Wrap effect thunks in list drefs. *)
-  let rec mailboxes: type a. a hlist -> a ListDrefs.hlist =
+  let rec mailboxes: type a. a hlist -> a MailboxDrefs.hlist =
     function
-    | Z -> ListDrefs.nil
+    | Z -> MailboxDrefs.nil
     | S (slot,hs) ->
        let module S = (val slot) in
-       ListDrefs.cons (S.getMail) (mailboxes hs)
+       MailboxDrefs.cons (S.getMail) (mailboxes hs)
 end
 
 (* We assume this will be generated from user query. *)
 module type JOIN = sig
   type index
   val slots: index Slots.hlist (* TODO do we really need slots here? Could it be not generated later on demand? *)
+  effect Trigger: index Events.hlist -> unit
 end
 type 'a join_sig = (module JOIN with type index = 'a)
 
@@ -224,7 +238,6 @@ module JoinShape(J: JOIN) = struct
   let mboxes = Slots.mailboxes slots
   let slot_list = Slots.abstract slots
 
-  effect Trigger: index -> unit
   let trigger tuple = perform (Trigger tuple)
 
   effect VRestriction: (unit -> 'a) -> 'a
@@ -234,7 +247,7 @@ module JoinShape(J: JOIN) = struct
      generative effects.  *)
   let memory = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
                    let module S = (val s) in
-                   let mem: S.t list ref = ref [] in
+                   let mem: S.t mailbox ref = ref [] in
                    (fun action ->
                      try action () with
                      | effect (S.GetMail) k -> continue k !mem
@@ -256,11 +269,11 @@ module JoinShape(J: JOIN) = struct
                      try action () with
                      | effect (S.Push x) k ->
                         let mail = begin
-                            try ListDrefs.force mboxes with
+                            try MailboxDrefs.force mboxes with
                             | effect (S.GetMail) k -> continue k [x]
                           end
                         in
-                        List.iter (trigger) (cart mail (fun x -> [x])); (* TODO put real impl here*)
+                        List.iter (trigger) (Mailboxes.cart mail (fun x -> [x])); (* TODO put real impl here*)
                         continue k ()))
 
   (* To join means applying this stack of effect handlers to a computation generating push notifications.
@@ -290,6 +303,7 @@ module DSL = struct
     (fun slots ->
       (module struct
          type index = a
+         effect Trigger: a Events.hlist -> unit
          let slots = slots
        end: (JOIN with type index = a)))
 
@@ -307,8 +321,7 @@ module DSL = struct
   let correlate (type a) n =
     let open Handlers in
     n (fun ((slots,reacts): (a Slots.hlist * a Reacts.hlist)) ->
-        let j = mkJoinSig slots in
-        let module JSig = (val j) in
+        let module JSig = (val mkJoinSig slots) in
         let streams = interleaved_bind slots reacts in
         let module JoinN = JoinShape(JSig) in
         (Async.run |+| JoinN.run) streams)
@@ -369,31 +382,33 @@ module Tests = struct
   let interleave3 = interleaved_bind slots3 reacts3
   let interleave4 = interleaved_bind slots4 reacts4
 
+
   (* These could be generated with appropriate Fridlender & Indrika numerals. *)
-  module J3 =
-    (struct
-      type index = (int * (string * (float * unit)))
-      let slots = slots3
-     end: (JOIN with type index = (int * (string * (float * unit)))))
-
-  module J4 =
-    (struct
-      type index = char * (int * (string * (float * unit)))
-      let slots = slots4
-     end: (JOIN with type index = char * (int * (string * (float * unit)))))
-
-  module Join3 = JoinShape(J3)
-  module Join4 = JoinShape(J4)
+  module Three = (val DSL.mkJoinSig slots3)
+  module Four = (val DSL.mkJoinSig slots4)
+  module Join3 = JoinShape(Three)
+  module Join4 = JoinShape(Four)
 
   let show3 action =
     try action () with
-    | effect (Join3.Trigger (i, (s, (f, ())))) k ->
-       continue k (Printf.printf "(%d,%s,%2.1f)\n" i s f)
+    | effect (Join3.Trigger _) k ->
+       continue k (Printf.printf "trigger\n")
 
   let show4 action =
     try action () with
-    | effect (Join4.Trigger (c, (i, (s, (f, ()))))) k ->
-       continue k (Printf.printf "(%c,%d,%s,%2.1f)\n" c i s f)
+    | effect (Join4.Trigger _) k ->
+       continue k (Printf.printf "trigger\n")
+
+  (* let show3 action =
+   *   try action () with
+   *   | effect (Join3.Trigger (i, (s, (f, ())))) k ->
+   *      continue k (Printf.printf "(%d,%s,%2.1f)\n" i s f)
+   *
+   * let show4 action =
+   *   try action () with
+   *   | effect (Join4.Trigger (c, (i, (s, (f, ()))))) k ->
+   *      continue k (Printf.printf "(%c,%d,%s,%2.1f)\n" c i s f) *)
+
 
   let test_join3 () =
     let open Handlers in
