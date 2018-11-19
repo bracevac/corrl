@@ -1,0 +1,20 @@
+(* Added by OPAM. *)
+let () =
+  try Topdirs.dir_directory (Sys.getenv "OCAML_TOPLEVEL_PATH")
+  with Not_found -> ()
+;;
+
+(* ## added by OPAM user-setup for ocamltop / base ## 3ec62baf6f9c219ae06d9814069da862 ## you can edit, but keep this line *)
+#use "topfind";;
+(* ## end of OPAM user-setup addition for ocamltop / base ## keep this line *)
+#mod_use "types.ml";;
+#mod_use "count.ml";;
+#mod_use "delimcont.ml";;
+#mod_use "async.ml";;
+#mod_use "handlers.ml";;
+#mod_use "monad.ml";;
+#mod_use "hlists.ml";;
+#mod_use "data.ml";;
+#mod_use "prelude.ml";;
+(*#mod_use "slot.ml";;
+#mod_use "suspension.ml";;*)

@@ -9,11 +9,17 @@ end
 module type EVENT = sig
   module Time : TIMEMODEL
   type 'a evt = Ev of 'a * Time.time
+  val evt: 'a -> Time.time -> 'a evt
+  val payload: 'a evt -> 'a
+  val time: 'a evt -> Time.time
 end
 
 module Event(T: TIMEMODEL): (EVENT with module Time = T) = struct
   module Time = T
   type 'a evt = Ev of 'a * T.time
+  let evt x i = Ev (x,i)
+  let payload (Ev (x,_)) = x
+  let time (Ev (_,t)) = t
 end
 
 (* Our default time model is interval-based *)
@@ -47,3 +53,5 @@ module Reactive = struct
 end
 
 include Count
+
+type 'a mailbox = ('a Evt.evt * (Count.t ref)) list
