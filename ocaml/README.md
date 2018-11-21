@@ -30,22 +30,26 @@ Open `main.ml`, type `C-c C-b Ret` to load.
 Drawback of using tuareg: Error reporting nearly useless, as only the
 absolute (!) character position is reported.
 
-### In a shell (WARNING: soon to be deprecated)
+If changes are made, I recommend a complete reload:
+Kill tuareg's REPL first with `C-c C-k` and then 
+reload with `C-c C-b Ret` again.
 
-Benefit: Better error reporting, generates native and byte code executables.
-
-Just run
-
-```
-$ make
-```
-
-The main executable is any of `main.{native,byte,debug}`, where `main.debug`
-yields more informative exception backtraces.
-Each `*.ml` file whose name is prefixed with `test` is compiled to a separate
-executable.
+Note: Be sure that the `.ocamlinit` properly loads
+the required `*.ml` via `#mod_use`.
 
 ### In a shell, using dune
+
+```
+$ opam install dune
+```
+
+Building with `dev` profile (the default, includes debugging information)
+
+```
+$ dune build main.exe
+```
+
+Building with `release` profile (includes compiler optimizations)
 
 ```
 $ dune build main.exe --profile release
