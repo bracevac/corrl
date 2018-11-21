@@ -23,10 +23,10 @@ let one   () = (s z)
 let two   () = (s (s z))
 let three () = (s (s (s z)))
 
-(* The correlate delimiter. Optional argument use_join: inject an external join signature module for debugging *)
-let correlate (type a) n ?(use_join: a join_sig option) =
+(* The correlate delimiter. Optional argument with_sig: inject an external join signature module for debugging *)
+let correlate (type a) n ?(with_sig: a join_sig option) =
   n (fun ((slots,reacts): (a Slots.hlist * a Reacts.hlist)) ->
-      let (slots,js) = match use_join with (* it's important to return the right slots list! *)
+      let (slots,js) = match with_sig with (* it's important to return the right slots list! *)
         | None -> (slots, mkJoinSig slots)
         | Some j -> let module J = (val j) in
                     (J.slots, j)

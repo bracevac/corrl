@@ -48,14 +48,14 @@ module Tests = struct
 
   let test_join3 () =
     (runtime |+| show3)
-      (correlate (s (s (s z))) ~use_join: j3
+      (correlate (s (s (s z))) ~with_sig: j3
          list1
          list2
          list3)
 
   let test_join4 () =
     (runtime |+| show4)
-      (correlate (s (s (s (s z)))) ~use_join: j4
+      (correlate (s (s (s (s z)))) ~with_sig: j4
          list0
          list1
          list2
