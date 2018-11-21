@@ -19,3 +19,4 @@ let () =
 #mod_use "slot.ml";;
 (*#mod_use "suspension.ml";;*)
 #mod_use "core.ml";;
+#mod_use "dsl.ml";;
