@@ -1,6 +1,7 @@
 open Prelude
 open Slot
 open Core
+open Dsl
 
 module Tests = struct
   let s1 = mkSlot 0
@@ -18,28 +19,44 @@ module Tests = struct
   let interleave3 = interleaved_bind slots3 reacts3
   let interleave4 = interleaved_bind slots4 reacts4
 
-  module Three = (val Dsl.mkJoinSig slots3)
-  module Four = (val Dsl.mkJoinSig slots4)
+  let j3 = Dsl.mkJoinSig slots3
+  let j4 = Dsl.mkJoinSig slots4
+  module Three = (val j3)
+  module Four = (val j4)
   module Join3 = JoinShape(Three)
   module Join4 = JoinShape(Four)
 
-  let show3 action =
-    let open Events in
-    try action () with (* TODO: print intervals, too *)
-    | effect (Join3.Trigger (S (i, S (s, S (f, Z))))) k ->
-       continue k (Printf.printf "(%d,%s,%2.1f)\n" (payload i) (payload s) (payload f))
+  let printer (type a) (j: a join_sig) (show: a Events.hlist -> string) action =
+    let module J = (val j) in
+    try action () with
+    | effect (J.Trigger tuple) k -> continue k (print_string  (show tuple))
 
-  let show4 action =
-    let open Events in
-    try action () with (* TODO: print intervals, too *)
-    | effect (Join4.Trigger (S (c, S (i, S (s, S (f, Z)))))) k ->
-       continue k (Printf.printf "(%c,%d,%s,%2.1f)\n" (payload c) (payload i) (payload s) (payload f))
+  let show3 =
+    (* TODO: print intervals, too *)
+    let show Events.((S (i, S (s, S (f, Z))))) =
+      Printf.sprintf "(%d,%s,%2.1f)\n" (payload i) (payload s) (payload f)
+    in printer j3 show
+
+  let show4 =
+    (* TODO: print intervals, too *)
+    let show Events.(S (c, S (i, S (s, S (f, Z))))) =
+      Printf.sprintf "(%c,%d,%s,%2.1f)\n" (payload c) (payload i) (payload s) (payload f)
+    in printer j4 show
+
+  let runtime action = Async.run action
 
   let test_join3 () =
-    let open Handlers in
-    ((Async.run) |+| show3 |+| Join3.run) interleave3
+    (runtime |+| show3)
+      (correlate (s (s (s z))) ~use_join: j3
+         list1
+         list2
+         list3)
 
   let test_join4 () =
-    let open Handlers in
-    ((Async.run) |+| show4 |+| Join4.run) interleave4
+    (runtime |+| show4)
+      (correlate (s (s (s (s z)))) ~use_join: j4
+         list0
+         list1
+         list2
+         list3)
 end

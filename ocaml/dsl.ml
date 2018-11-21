@@ -23,12 +23,17 @@ let one   () = (s z)
 let two   () = (s (s z))
 let three () = (s (s (s z)))
 
-let correlate (type a) n =
-  let open Handlers in
+(* The correlate delimiter. Optional argument use_join: inject an external join signature module for debugging *)
+let correlate (type a) n ?(use_join: a join_sig option) =
   n (fun ((slots,reacts): (a Slots.hlist * a Reacts.hlist)) ->
-      let module JSig = (val mkJoinSig slots) in
+      let (slots,js) = match use_join with (* it's important to return the right slots list! *)
+        | None -> (slots, mkJoinSig slots)
+        | Some j -> let module J = (val j) in
+                    (J.slots, j)
+      in
+      let module JSig = (val js) in
       let streams = interleaved_bind slots reacts in
       let module JoinN = JoinShape(JSig) in
-      (Async.run |+| JoinN.run) streams)
+      (fun () -> JoinN.run streams))
 
 (* TODO: Could we have an applicative syntax? *)

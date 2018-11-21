@@ -50,11 +50,11 @@ type 'a join_sig = (module JOIN with type index = 'a)
 
 (* Arity generic join implementation. *)
 module JoinShape(J: JOIN) = struct
-  include J
-  let mboxes = Slots.mailboxes slots
-  let slot_list = Slots.abstract slots
+  module Signature = J
+  let mboxes = Slots.mailboxes J.slots
+  let slot_list = Slots.abstract J.slots
 
-  let trigger tuple = perform (Trigger tuple)
+  let trigger tuple = perform (J.Trigger tuple)
 
   effect VRestriction: (unit -> 'a) -> 'a
 
@@ -117,8 +117,8 @@ let interleaved_bind: type a. a Slots.hlist -> a Reacts.hlist -> unit -> unit =
 
 
 (* TODOs: *)
-(* Integrate suspension (low)
-   Restriction handlers (high)
+(* Restriction handlers (high)
+   Dataflow network (medium)
    Comprehensions (medium)
-   Implicits (very low)
-  *)
+   Integrate suspension (low)
+   Implicits (very low)  *)
