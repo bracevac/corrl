@@ -30,7 +30,7 @@ Open `main.ml`, type `C-c C-b Ret` to load.
 Drawback of using tuareg: Error reporting nearly useless, as only the
 absolute (!) character position is reported.
 
-### In a shell
+### In a shell (WARNING: soon to be deprecated)
 
 Benefit: Better error reporting, generates native and byte code executables.
 
@@ -43,4 +43,36 @@ $ make
 The main executable is any of `main.{native,byte,debug}`, where `main.debug`
 yields more informative exception backtraces.
 Each `*.ml` file whose name is prefixed with `test` is compiled to a separate
-executable. 
+executable.
+
+### In a shell, using dune
+
+```
+$ dune build main.exe --profile release
+```
+
+### Notes on REPL use in the shell
+
+Running
+
+``` 
+$ ocaml main.ml
+```
+
+_won't_ work. Neither does
+
+```
+$ ocaml -init .ocamlinit main.ml
+```
+
+Instead, first load up the REPL
+
+```
+$ ocaml
+```
+
+and then invoke
+
+```
+# #use "main.ml"
+```
