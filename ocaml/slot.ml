@@ -16,7 +16,7 @@ end
 type 'a slot = (module SLOT with type t = 'a)
 type slot_ex = (module SLOT)
 (* Create a slot instance from a value witnessing the type. *)
-let mk_slot (type s) (t: s typ) =
+let mk_slot (type s) (_: s typ) =
   (module struct
      type t = s
      effect Push: t evt -> unit

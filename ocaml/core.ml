@@ -10,7 +10,7 @@ module Mailboxes = struct
     match h with
     | Z -> f Events.nil
     | S (ls,h) ->
-       List.concat @@ List.map (fun (x,lives) -> cart h (fun xs -> f Events.(cons x xs))) ls
+       List.concat @@ List.map (fun (x,_) -> cart h (fun xs -> f Events.(cons x xs))) ls
     (* TODO: consumer must take care of lives counter somehow *)
 end
 
@@ -61,7 +61,7 @@ module JoinShape(J: JOIN) = struct
   (* Handles the ambient mailbox state for each slot. *)
   (* Projecting to a uniformly-typed list of abstract SLOT modules makes it easier to generate handlers of
      generative effects.  *)
-  let memory () = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
+  let memory () = Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
                    let module S = (val s) in
                    let mem: S.t mailbox ref = ref [] in
                    (fun action ->
@@ -70,7 +70,7 @@ module JoinShape(J: JOIN) = struct
                      | effect (S.SetMail l) k -> mem := l; continue k ()))
 
   (* Default behavior: enqueue each observed event notification in the corresponding mailbox. *)
-  let forAll () = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
+  let forAll () = Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
                    let module S = (val s) in
                    (fun action ->
                      try action () with
@@ -79,7 +79,7 @@ module JoinShape(J: JOIN) = struct
                         continue k (S.push x)))
 
   (* Implements the generic cartesian product.  *)
-  let reify () = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
+  let reify () = Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
                    let module S = (val s) in
                    (fun action ->
                      try action () with

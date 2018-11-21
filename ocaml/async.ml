@@ -91,7 +91,7 @@ let run main =
     | effect (Receive chan) k ->
       begin match !chan with
         | ChEmpty -> chan := ChWaiting (k, (Queue.create ()))
-        | ChWaiting (c, q) -> Queue.add k q
+        | ChWaiting (_, q) -> Queue.add k q
         | ChValues (v, q) ->
           chan := if (Queue.is_empty q)
             then ChEmpty
