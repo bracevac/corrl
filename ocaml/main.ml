@@ -18,8 +18,8 @@ module Tests = struct
   let interleave3 = interleaved_bind slots3 reacts3
   let interleave4 = interleaved_bind slots4 reacts4
 
-  module Three = (val DSL.mkJoinSig slots3)
-  module Four = (val DSL.mkJoinSig slots4)
+  module Three = (val Dsl.mkJoinSig slots3)
+  module Four = (val Dsl.mkJoinSig slots4)
   module Join3 = JoinShape(Three)
   module Join4 = JoinShape(Four)
 

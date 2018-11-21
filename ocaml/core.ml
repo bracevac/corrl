@@ -1,4 +1,3 @@
-#mod_use "slot.ml";; (* TODO: put in ocamlinit *)
 open Prelude
 open Hlists
 open Slot
@@ -62,7 +61,7 @@ module JoinShape(J: JOIN) = struct
   (* Handles the ambient mailbox state for each slot. *)
   (* Projecting to a uniformly-typed list of abstract SLOT modules makes it easier to generate handlers of
      generative effects.  *)
-  let memory = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
+  let memory () = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
                    let module S = (val s) in
                    let mem: S.t mailbox ref = ref [] in
                    (fun action ->
@@ -71,7 +70,7 @@ module JoinShape(J: JOIN) = struct
                      | effect (S.SetMail l) k -> mem := l; continue k ()))
 
   (* Default behavior: enqueue each observed event notification in the corresponding mailbox. *)
-  let forAll = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
+  let forAll () = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
                    let module S = (val s) in
                    (fun action ->
                      try action () with
@@ -80,7 +79,7 @@ module JoinShape(J: JOIN) = struct
                         continue k (S.push x)))
 
   (* Implements the generic cartesian product.  *)
-  let reify = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
+  let reify () = Handlers.gen slot_list (fun i (s: (module SLOT)) ->
                    let module S = (val s) in
                    (fun action ->
                      try action () with
@@ -98,7 +97,7 @@ module JoinShape(J: JOIN) = struct
      If we had effect types, then the join would be an elimination form of all generative push effects
      S1.Push ... Sn.Push in the slots hlist. *)
   let run action =
-    Handlers.with_hs [memory;reify;forAll] action
+    Handlers.with_hs [(memory ());(reify ());(forAll ())] action
 end
 
 (* Generates the interleaved push iterations over n reactives *)
@@ -114,3 +113,12 @@ let interleaved_bind: type a. a Slots.hlist -> a Reacts.hlist -> unit -> unit =
   in (fun slots ->
       let mk_thunks = thunk_list slots in
       fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs))) (* TODO: generate the array right away *)
+
+
+
+(* TODOs: *)
+(* Integrate suspension (low)
+   Restriction handlers (high)
+   Comprehensions (medium)
+   Implicits (very low)
+  *)

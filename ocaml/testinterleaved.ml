@@ -3,6 +3,8 @@ open Handlers
 open Data
 open Reactive
 
+(* TODO this is broken, reintegrate with new core *)
+
 let streams = [|liftArray [|"1";"2";"3";"4"|];
                 liftArray [|"a";"b";"c";"d"|];
                 liftArray [|"H";"I";"J";"K"|]|]
