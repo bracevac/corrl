@@ -2,6 +2,7 @@ open Prelude
 open Slot
 open Core
 open Dsl
+open Restriction
 
 module Tests = struct
   let s1 = mkSlot 0
@@ -21,10 +22,10 @@ module Tests = struct
 
   let j3 = Dsl.mkJoinSig slots3
   let j4 = Dsl.mkJoinSig slots4
-  module Three = (val j3)
-  module Four = (val j4)
-  module Join3 = JoinShape(Three)
-  module Join4 = JoinShape(Four)
+  module J3 = (val j3)
+  module J4 = (val j4)
+  module Join3 = JoinShape(J3)
+  module Join4 = JoinShape(J4)
 
   let printer (type a) (j: a join_sig) (show: a Events.hlist -> string) action =
     let module J = (val j) in
@@ -59,4 +60,15 @@ module Tests = struct
          list1
          list2
          list3)
+
+  let test_join3_most_recently () =
+    let two = Hlists.(Next Here) in (* TODO use nice combinators instead of raw constructors *)
+    let three = Hlists.(Next (Next Here)) in
+    ((Async.run)
+     |+| show3
+     |+| (Join3.run)
+     |+| (most_recently J3.slots two) (* FIXME: these are inserted at the wrong position in the handler stack! *)
+     |+| (most_recently J3.slots three)) interleave3 (* TODO now integrate this with the correlate combinator *)
 end
+
+let _ = Tests.test_join3_most_recently ()
