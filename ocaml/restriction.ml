@@ -48,14 +48,15 @@ let most_recently: type a i b. a Slots.hlist -> (i,a) ptr -> (unit -> b) -> b =
 let affinely: type a i b. int -> a Slots.hlist -> (i,a) ptr -> (unit -> b) -> b =
   (fun n slots ptr ->
     let module S = (val (SlotsPtr.proj ptr slots)) in
-    let update mbox ev cv = update_first (fun (y,_) -> ev = y)
-                         (fun (x,c) -> c := cv; (x,c))
-                         mbox
+    let update mbox ev cv =
+      update_first (fun (y,_) -> ev = y)
+        (fun (x,c) -> c := cv; (x,c))
+        mbox
     in
     (fun action ->
       try action () with
       | effect (S.Push x) k ->
-         S.setMail(update (S.getMail ()) x (Count.Fin n));
+         S.setMail (update (S.getMail ()) x (Count.Fin n));
          continue k (S.push x)))
 
 (* There are interesting use cases for working with sets of pointers (apart from restrictions that

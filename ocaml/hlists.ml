@@ -34,6 +34,25 @@ type (_,_) ptr =
   | Here : ('a,'a*_) ptr
   | Next : ('a,'r) ptr -> ('a,_*'r) ptr
 
+(* Multisets of pointers *)
+module Ptrs = struct
+  (* Second type parameter enforces that all pointers point into the same context. *)
+  type (_,'a) hlist =
+    | Z: (unit,'a) hlist
+    | S: (('i,'a) ptr * ('j,'a) hlist) -> ('i * 'j, 'a) hlist
+
+  let nil () = Z
+  let cons p ps = S (p (), ps) (* Note the difference to other hlists *)
+
+  let n0 () = Here
+  let n1 () = Next Here
+  let n2 () = Next (Next Here)
+  let n3 () = Next (Next (Next Here))
+  let n4 () = Next (Next (Next (Next Here)))
+  let n5 () = Next (Next (Next (Next (Next Here))))
+end
+
+
 module HListP(H: hlist) = struct
   include H
 
