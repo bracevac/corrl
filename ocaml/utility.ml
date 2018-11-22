@@ -1,10 +1,4 @@
-module type SomeT = sig
-  type t
-end
-
-let println s = print_string s; print_newline ()
-
-let flatMap f l = List.concat (List.map f l)
+let println = print_endline
 
 let rec update_first p f = function
   | [] -> []

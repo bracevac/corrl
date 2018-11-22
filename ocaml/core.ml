@@ -120,5 +120,6 @@ let interleaved_bind: type a. a Slots.hlist -> a Reacts.hlist -> unit -> unit =
 (* Restriction handlers (high)
    Dataflow network (medium)
    Comprehensions (medium)
+   Windows (medium)
    Integrate suspension (low)
    Implicits (very low)  *)

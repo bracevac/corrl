@@ -2,7 +2,7 @@ open Prelude
 open Hlists
 open Slot
 open Core
-
+open Utility
 
 module HListPtr(H: hlist) = struct (* TODO: replace HListP with this module in hlists.ml*)
   open H
@@ -39,11 +39,24 @@ let most_recently: type a i b. a Slots.hlist -> (i,a) ptr -> (unit -> b) -> b =
     (fun action ->
       try action () with
       | effect (S.Push x) k ->
-         (* Note: in contrast to paper, this version preserves the  *)
+         (* Note: in contrast to paper, this version preserves the
+            life counter assinged by the layers below.  *)
          let entry = List.find (fun (y,_) -> y = x) (S.getMail ()) in
          S.setMail (entry :: []);
          continue k (S.push x)))
 
+let affinely: type a i b. int -> a Slots.hlist -> (i,a) ptr -> (unit -> b) -> b =
+  (fun n slots ptr ->
+    let module S = (val (SlotsPtr.proj ptr slots)) in
+    let update mbox ev cv = update_first (fun (y,_) -> ev = y)
+                         (fun (x,c) -> c := cv; (x,c))
+                         mbox
+    in
+    (fun action ->
+      try action () with
+      | effect (S.Push x) k ->
+         S.setMail(update (S.getMail ()) x (Count.Fin n));
+         continue k (S.push x)))
 
 (* There are interesting use cases for working with sets of pointers (apart from restrictions that
 need to refer to more than one slot), e.g., bulk application of a given restriction to multiple
