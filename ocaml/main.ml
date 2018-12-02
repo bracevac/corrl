@@ -65,14 +65,16 @@ module Tests = struct
     let two = Hlists.(Next Here) in (* TODO use nice combinators instead of raw constructors *)
     let three = Hlists.(Next (Next Here)) in
     let four =  Hlists.(Next (Next (Next Here))) in
+    let computation () =
     (* for now this is the manual expansion of the system *)
-    (runtime |+| show4 |+| Join4.((memory ())
-                                  |+| (reify ())
-                                  |+| (most_recently J4.slots four)
-                                  |+| (most_recently J4.slots two) (* TODO: implement the injection mechanism *)
-                                  |+| (most_recently J4.slots three)
-                                  |+| (forAll ())))
-      interleave4 (* TODO now integrate this with the correlate combinator *)
+      Async.async (fun () -> (* Important: each join runs in a separate async strand *)
+          (show4 |+| Join4.((memory ())
+                            |+| (reify ())
+                            |+| (most_recently four J4.slots)
+                            |+| (most_recently two J4.slots) (* TODO: implement the injection mechanism *)
+                            |+| (most_recently three J4.slots)
+                            |+| (forAll ()))) interleave4)
+    in runtime computation (* TODO now integrate this with the correlate combinator *)
 end
 
 let _ = Tests.test_join4_most_recently ()

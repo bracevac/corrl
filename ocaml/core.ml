@@ -56,8 +56,6 @@ module JoinShape(J: JOIN) = struct
 
   let trigger tuple = perform (J.Trigger tuple)
 
-  effect VRestriction: (unit -> 'a) -> 'a
-
   (* Handles the ambient mailbox state for each slot. *)
   (* Projecting to a uniformly-typed list of abstract SLOT modules makes it easier to generate handlers of
      generative effects.  *)

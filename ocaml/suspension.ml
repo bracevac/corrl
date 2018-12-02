@@ -32,6 +32,7 @@ struct
       match !state with
       | Run -> continue k ()
       | Pause ->
+        (* This'll ensure that the current async strand is properly captured and stored. *)
         let _: unit = Delimcont.shift (fun cb -> cont := Some cb) in
         continue k ()
 end

@@ -146,12 +146,14 @@ let interleaved thunks =
             in ())
         in continue k v
     in
-    Array.iter (fun thunk ->
-        Delimcont.reset (fun () ->
-            (* intercept_async (terminator (suspendable thunk))  *)
-            (* intercept_async (suspendable (terminator thunk))   *)
-            intercept_async (terminator thunk)))
-      thunks;
+    let _ = Array.iter (fun thunk ->
+        (* In order to properly capture the context of an async strand, we enclose
+           it with reset. This'll capture the terminator logic and the interception logic
+           along with the supplied strand. *)
+        Delimcont.reset (fun () -> intercept_async (terminator thunk)))
+      thunks
+    in
+    (* This exposes the effects of each strands to the caller of interleaved: *)
     while (!count > 0) do
       (receive chan) ();
     done

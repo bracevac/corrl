@@ -2,6 +2,11 @@ open Prelude
 open Slot
 open Core
 
+(* We utilize the Fridlender & Indrika construction for variadic join specifications.
+   rout = correlate <n> r1...rn ()
+
+*)
+
 let mkJoinSig: type a. a Slots.hlist -> a join_sig =
   (fun slots ->
     (module struct
@@ -9,6 +14,7 @@ let mkJoinSig: type a. a Slots.hlist -> a join_sig =
        effect Trigger: a Events.hlist -> unit
        let slots = slots
      end: (JOIN with type index = a)))
+
 
 let z k = k (Slots.nil, Reacts.nil)
 let s n k react =
@@ -34,6 +40,6 @@ let correlate (type a) n ?(with_sig: a join_sig option) =
       let module JSig = (val js) in
       let streams = interleaved_bind slots reacts in
       let module JoinN = JoinShape(JSig) in
-      (fun () -> JoinN.run streams))
+      (fun () -> JoinN.run streams)) (* TODO this should be done asynchronously *)
 
 (* TODO: Could we have an applicative syntax? *)

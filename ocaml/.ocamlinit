@@ -18,7 +18,7 @@ let () =
 #mod_use "data.ml";;
 #mod_use "prelude.ml";;
 #mod_use "slot.ml";;
-(*#mod_use "suspension.ml";;*)
+#mod_use "suspension.ml";;
 #mod_use "core.ml";;
 #mod_use "dsl.ml";;
 #mod_use "restriction.ml";;

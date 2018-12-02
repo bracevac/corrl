@@ -24,6 +24,11 @@ module HList(E: sig type 'a t end) = struct
 
   let nil = Z
   let cons h t = S (h,t)
+
+  let rec length: type a. a hlist -> int =
+    function
+    | Z -> 0
+    | S (_,hs) -> 1 + (length hs)
 end
 
 (* Simple HList, just for elements of type 'a *)
