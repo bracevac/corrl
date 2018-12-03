@@ -42,6 +42,22 @@ module HMAP(S:hlist)(T:hlist) = struct
     | S.S (h,t) -> T.S (f h, map {f} t)
 end
 
+module HFOLD(H:hlist) = struct
+  type 'a fold = {zero: 'a; succ: 'b. 'b H.el -> (unit -> 'a) -> 'a }
+  let rec fold: type a b. a fold -> b H.hlist -> a = fun {zero;succ} ->
+    function
+    | H.Z -> zero
+    | H.S (x,t) -> succ x (fun () -> fold {zero;succ} t)
+end
+
+module HFOREACH(H:hlist) = struct
+  type foreach = {f: 'a. 'a H.el -> unit}
+  let foreach: type a. foreach -> a H.hlist -> unit = fun {f} hs ->
+    let module Units = HList(struct type 'a t = unit end) in
+    let module M = HMAP(H)(Units) in
+    ignore @@ M.map {M.f = f} hs
+end
+
 (* Simple HList, just for elements of type 'a *)
 module HL = HList(struct type 'a t = 'a end)
 

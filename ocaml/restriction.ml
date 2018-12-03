@@ -76,21 +76,32 @@ let aligning: type ctx xs a. (xs,ctx) Ptrs.hlist -> ctx Suspensions.hlist -> (ct
     let suspensions_ctx = SuspensionsPtr.proj_ptrs suspensions ptrs in
     let ctx = SlotsPtr.proj_ptrs ctx ptrs in
     let module SyncState = HList(struct type 'a t = 'a evt option ref end) in
-    let sync_state = (* TODO: it might be cleverer to have suspension accept callbacks for resumption. *)
+    let sync_state = (* TODO: it might be more clever to have suspension accept callbacks for resumption. *)
       let module M = HMAP(Slots)(SyncState) in
       M.map {M.f = fun s -> ref None} ctx
+    in
+    let reset_sync_state () =
+      let module M = HFOREACH(SyncState) in
+      M.foreach {M.f = fun x -> x := None} sync_state
+    in
+    let check_sync =
+      let module F = HFOLD(SyncState) in
+      let is_defined = function None -> false | _ -> true in
+      fun () -> F.fold {F.zero = true; F.succ = (fun x rest -> (is_defined !x) && (rest ()))} sync_state
     in
     let set st evt = match !st with
       | None -> st := Some evt
       | _ -> failwith "aligning: strand was already observed"
     in
-    (* let rec gen_try_release: type b c. c Slots.hlist -> c Suspensions.hlist -> c SyncState.hlist -> (unit -> b) -> b =
-     *   fun ctx ss sync ->
-     *   match ctx, ss, sync with
-     *   | Slots.Z, Suspensions.Z, SyncState.Z -> id_handler
-     *   | Slots.(S (slot, ctx)), Suspensions.(S (s,ss)), SyncState.(S (st,sts)) ->
-     * in *)
-    let try_release k = failwith "not implemented" in
+    let try_release k =
+      if check_sync () then
+        begin
+          reset_sync_state ();
+          failwith "not implemented";
+          k ()
+        end
+      else k ()
+    in
     let rec gen_handler: type c. c Slots.hlist -> c Suspensions.hlist -> c SyncState.hlist -> a handler = fun ctx ss sync ->
       match ctx, ss, sync with
       | Slots.Z, Suspensions.Z, SyncState.Z -> id_handler
