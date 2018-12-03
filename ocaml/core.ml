@@ -42,7 +42,12 @@ end
 
 (* For now, we give each slot the suspension capability by default. Ideally, such capabilities should be present
    only when required by an externally supplied restriction handler. *)
-module Suspensions =  HList(struct type 'a t = Suspension.t end)
+module Suspensions = struct
+  include HList(struct type 'a t = Suspension.t end)
+  let rec to_list: type a. a hlist -> Suspension.t list = function
+    | Z -> []
+    | S (s,ss) -> s :: (to_list ss)
+end
 let mk_suspensions: type a. a Slots.hlist -> a Suspensions.hlist = fun slots ->
  let module M = HMAP(Slots)(Suspensions) in
  M.map {M.f = fun _ -> Suspension.mk ()} slots
@@ -107,19 +112,6 @@ module JoinShape(J: JOIN) = struct
 end
 
 (* Generates the interleaved push iterations over n reactives *)
-(* let interleaved_bind: type a. a Slots.hlist -> a Reacts.hlist -> unit -> unit =
- *   let rec thunk_list: type a. a Slots.hlist -> a Reacts.hlist -> (unit -> unit) list =
- *     function
- *     | Slots.Z -> (fun Reacts.Z -> [])
- *     | Slots.(S (s,ss)) ->
- *        let module S = (val s) in
- *        let next = thunk_list ss in
- *        (fun Reacts.(S (r,rs)) ->
- *          (fun () -> Reactive.eat (S.push) r) :: (next rs))
- *   in (fun slots ->
- *       let mk_thunks = thunk_list slots in
- *       fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs))) (\* TODO: generate the array right away *\) *)
-
 let interleaved_bind: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> unit -> unit =
   let rec thunk_list: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> (unit -> unit) list =
     fun slots suspensions ->
