@@ -26,7 +26,7 @@ end
 (* It seems, the dptr abstraction might come in handy! *)
 
 module SlotsPtr = HListPtr(Slots) (* TODO should this be part of Core? *)
-
+module SuspensionsPtr = HListPtr(Suspensions)
 
 
 (* TODO: this should move *)
@@ -70,7 +70,7 @@ let affinely: type ctx i a. int -> (i,ctx) ptr -> (ctx,a) chandler =
 (* TODO: can we express requirements on shape of context, but what about the *capabilities* of each context element?
 Sam's paper on holes might be the solution! Also: couldn't we model a poor man's effect type system this way?
 For now, we assume that all slots have the capability of supension/resumption. *)
-(* let aligning: type ctx xs a. (xs,ctx) Ptrs.hlist -> (ctx,a) chandler =
+(* let aligning: type ctx xs a. (xs,ctx) Ptrs.hlist -> ctx Suspensions.hlist -> (ctx,a) chandler = (\* TODO the chandler type should carry the context *\)
  *   (fun ptrs ->
  *     let rec
  *

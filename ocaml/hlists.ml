@@ -31,6 +31,17 @@ module HList(E: sig type 'a t end) = struct
     | S (_,hs) -> 1 + (length hs)
 end
 
+(* Mapping, between element representations. Element type _index_
+  should be preserved though (which means that the length is also
+  preserved)
+*)
+module HMAP(S:hlist)(T:hlist) = struct
+  type ftor = {f: 'a. 'a S.el -> 'a T.el}
+  let rec map : type a. ftor -> a S.hlist -> a T.hlist = fun {f} -> function
+    | S.Z -> T.Z
+    | S.S (h,t) -> T.S (f h, map {f} t)
+end
+
 (* Simple HList, just for elements of type 'a *)
 module HL = HList(struct type 'a t = 'a end)
 
@@ -47,7 +58,7 @@ module Ptrs = struct
     | S: (('i,'a) ptr * ('j,'a) hlist) -> ('i * 'j, 'a) hlist
 
   let nil () = Z
-  let cons p ps = S (p (), ps) (* Note the difference to other hlists *)
+  let cons p ps = S (p (), ps) (* Note the difference to other hlists, which is due to the value restriction *)
 
   let n0 () = Here
   let n1 () = Next Here
@@ -56,7 +67,6 @@ module Ptrs = struct
   let n4 () = Next (Next (Next (Next Here)))
   let n5 () = Next (Next (Next (Next (Next Here))))
 end
-
 
 module HListP(H: hlist) = struct
   include H
@@ -74,18 +84,18 @@ module HListP(H: hlist) = struct
       | (Next n, S (h,refs)) -> S(h,rplc n refs v)
 end
 
-module HLP = HListP(HL)
-
-(* Mapping, between element representations. Element type _index_
-  should be preserved though (which means that the length is also
-  preeserved)
-*)
-module HMAP(S:hlist)(T:hlist) = struct
-  type ftor = {f: 'a. 'a S.el -> 'a T.el}
-  let rec map : type a. ftor -> a S.hlist -> a T.hlist = fun {f} -> function
-    | S.Z -> T.Z
-    | S.S (h,t) -> T.S (f h, map {f} t)
+module HListPs(H: hlist) = struct
+  include HListP(H)
+  let proj_ptrs: type xs ctx. ctx hlist -> (xs,ctx) Ptrs.hlist -> xs hlist = fun hs ->
+    let rec aux: type xs. (xs,ctx) Ptrs.hlist -> xs hlist =
+      function
+      | Ptrs.Z -> nil
+      | Ptrs.(S (i,ps)) -> cons (proj i hs) (aux ps)
+    in
+    aux
 end
+
+module HLP = HListP(HL)
 
 
 (* HList of lists *)
