@@ -3,8 +3,8 @@ open Slot
 open Core
 
 (* We utilize the Fridlender & Indrika construction for variadic join specifications.
-   rout = correlate <n> r1...rn ()
-
+   rout = correlate <n> r1 ... rn
+           (fun x1 ... xn -> where p yield e)
 *)
 
 let mkJoinSig: type a. a Slots.hlist -> a join_sig =
@@ -38,8 +38,8 @@ let correlate (type a) n ?(with_sig: a join_sig option) =
                     (J.slots, j)
       in
       let module JSig = (val js) in
-      let streams = interleaved_bind slots reacts in
       let module JoinN = JoinShape(JSig) in
+      let streams = interleaved_bind slots JoinN.suspensions reacts in
       (fun () -> JoinN.run streams)) (* TODO this should be done asynchronously *)
 
 (* TODO: Could we have an applicative syntax? *)

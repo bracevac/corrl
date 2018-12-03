@@ -40,6 +40,13 @@ module Slots = struct
        MailboxDrefs.cons (S.getMail) (mailboxes hs)
 end
 
+(* For now, we give each slot the suspension capability by default. Ideally, such capabilities should be present
+   only when required by an externally supplied restriction handler. *)
+module Suspensions =  HList(struct type 'a t = Suspension.t end)
+let mk_suspensions: type a. a Slots.hlist -> a Suspensions.hlist = fun slots ->
+ let module M = HMAP(Slots)(Suspensions) in
+ M.map {M.f = fun _ -> Suspension.mk ()} slots
+
 (* We assume this will be generated from user query. *)
 module type JOIN = sig
   type index
@@ -53,6 +60,7 @@ module JoinShape(J: JOIN) = struct
   module Signature = J
   let mboxes = Slots.mailboxes J.slots
   let slot_list = Slots.abstract J.slots
+  let suspensions = mk_suspensions J.slots
 
   let trigger tuple = perform (J.Trigger tuple)
 
@@ -88,7 +96,7 @@ module JoinShape(J: JOIN) = struct
                             | effect (S.GetMail) k -> continue k [entry] (*TODO would make more sense if the life counter was offered already in the push message *)
                           end
                         in
-                        List.iter (trigger) (Mailboxes.cart mail (fun x -> [x])); (* TODO put real impl here*)
+                        List.iter (trigger) (Mailboxes.cart mail (fun x -> [x])); (* TODO make cart consider the life counters. *)
                         continue k ()))
 
   (* To join means applying this stack of effect handlers to a computation generating push notifications.
@@ -99,17 +107,37 @@ module JoinShape(J: JOIN) = struct
 end
 
 (* Generates the interleaved push iterations over n reactives *)
-let interleaved_bind: type a. a Slots.hlist -> a Reacts.hlist -> unit -> unit =
-  let rec thunk_list: type a. a Slots.hlist -> a Reacts.hlist -> (unit -> unit) list =
-    function
-    | Slots.Z -> (fun Reacts.Z -> [])
-    | Slots.(S (s,ss)) ->
+(* let interleaved_bind: type a. a Slots.hlist -> a Reacts.hlist -> unit -> unit =
+ *   let rec thunk_list: type a. a Slots.hlist -> a Reacts.hlist -> (unit -> unit) list =
+ *     function
+ *     | Slots.Z -> (fun Reacts.Z -> [])
+ *     | Slots.(S (s,ss)) ->
+ *        let module S = (val s) in
+ *        let next = thunk_list ss in
+ *        (fun Reacts.(S (r,rs)) ->
+ *          (fun () -> Reactive.eat (S.push) r) :: (next rs))
+ *   in (fun slots ->
+ *       let mk_thunks = thunk_list slots in
+ *       fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs))) (\* TODO: generate the array right away *\) *)
+
+let interleaved_bind: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> unit -> unit =
+  let rec thunk_list: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> (unit -> unit) list =
+    fun slots suspensions ->
+    match slots, suspensions with
+    | Slots.Z, Suspensions.Z  -> (fun Reacts.Z -> [])
+    | Slots.(S (s,ss)), Suspensions.(S (c,cs)) ->
        let module S = (val s) in
-       let next = thunk_list ss in
+       let suspendable_strand r () =
+         try (Reactive.eat (S.push) r) with
+         | effect (S.Push x) k ->
+            S.push x;
+            c.guard (continue k)
+       in
+       let next = thunk_list ss cs in
        (fun Reacts.(S (r,rs)) ->
-         (fun () -> Reactive.eat (S.push) r) :: (next rs))
-  in (fun slots ->
-      let mk_thunks = thunk_list slots in
+         (suspendable_strand r) :: (next rs))
+  in (fun slots suspensions ->
+      let mk_thunks = thunk_list slots suspensions in
       fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs))) (* TODO: generate the array right away *)
 
 

@@ -67,7 +67,7 @@ let affinely: type ctx i a. int -> (i,ctx) ptr -> (ctx,a) chandler =
          S.setMail (update (S.getMail ()) x (Count.Fin n));
          continue k (S.push x)))
 
-(* TODO: we can express requirements on shape of context, but what about the *capabilities* of each context element?
+(* TODO: can we express requirements on shape of context, but what about the *capabilities* of each context element?
 Sam's paper on holes might be the solution! Also: couldn't we model a poor man's effect type system this way?
 For now, we assume that all slots have the capability of supension/resumption. *)
 (* let aligning: type ctx xs a. (xs,ctx) Ptrs.hlist -> (ctx,a) chandler =

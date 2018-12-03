@@ -17,8 +17,6 @@ module Tests = struct
   let list3 = Reactive.toR [evt 0.3 (5,6); evt 0.2 (5,6); evt 0.1 (6,6)]
   let reacts3 = Reacts.(cons list1 @@ cons list2 @@ cons list3 nil)
   let reacts4 = Reacts.(cons list0 reacts3)
-  let interleave3 = interleaved_bind slots3 reacts3
-  let interleave4 = interleaved_bind slots4 reacts4
 
   let j3 = Dsl.mkJoinSig slots3
   let j4 = Dsl.mkJoinSig slots4
@@ -26,6 +24,9 @@ module Tests = struct
   module J4 = (val j4)
   module Join3 = JoinShape(J3)
   module Join4 = JoinShape(J4)
+
+  let interleave3 = interleaved_bind slots3 Join3.suspensions reacts3
+  let interleave4 = interleaved_bind slots4 Join4.suspensions reacts4
 
   let printer (type a) (j: a join_sig) (show: a Events.hlist -> string) action =
     let module J = (val j) in
@@ -70,10 +71,11 @@ module Tests = struct
       Async.async (fun () -> (* Important: each join runs in a separate async strand *)
           (show4 |+| Join4.((memory ())
                             |+| (reify ())
-                            |+| (most_recently four J4.slots)
-                            |+| (most_recently two J4.slots) (* TODO: implement the injection mechanism *)
+                            |+| (most_recently four  J4.slots)
+                            |+| (most_recently two   J4.slots) (* TODO: implement the injection mechanism *)
                             |+| (most_recently three J4.slots)
-                            |+| (forAll ()))) interleave4)
+                            |+| (forAll ())))
+            interleave4)
     in runtime computation (* TODO now integrate this with the correlate combinator *)
 end
 
