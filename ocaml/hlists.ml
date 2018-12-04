@@ -58,6 +58,14 @@ module HFOREACH(H:hlist) = struct
     ignore @@ M.map {M.f = f} hs
 end
 
+module HZIP(H1:hlist)(H2:hlist) = struct
+  include HList(struct type 'a t = 'a H1.el * 'a H2.el end)
+  let rec zip: type a. a H1.hlist -> a H2.hlist -> a hlist = fun h1 h2 ->
+    match h1, h2 with
+    | H1.Z, H2.Z -> Z
+    | H1.(S (x1,h1)), H2.(S (x2,h2)) -> S ((x1,x2), zip h1 h2)
+end
+
 (* Simple HList, just for elements of type 'a *)
 module HL = HList(struct type 'a t = 'a end)
 

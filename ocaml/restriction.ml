@@ -75,19 +75,37 @@ let aligning: type ctx xs a. (xs,ctx) Ptrs.hlist -> ctx Suspensions.hlist -> (ct
   (fun ptrs suspensions ctx ->
     let suspensions_ctx = SuspensionsPtr.proj_ptrs suspensions ptrs in
     let ctx = SlotsPtr.proj_ptrs ctx ptrs in
-    let module SyncState = HList(struct type 'a t = 'a evt option ref end) in
+    let module Cells = HList(struct type 'a t = 'a evt option ref end) in
+    let module SyncState = HZIP(Slots)(Cells) in
     let sync_state = (* TODO: it might be more clever to have suspension accept callbacks for resumption. *)
       let module M = HMAP(Slots)(SyncState) in
-      M.map {M.f = fun s -> ref None} ctx
+      M.map {M.f = fun s -> (s,ref None)} ctx
     in
-    let reset_sync_state () =
+    let reset_sync_state =
       let module M = HFOREACH(SyncState) in
-      M.foreach {M.f = fun x -> x := None} sync_state
+      fun () -> M.foreach {M.f = fun (_,x) -> x := None} sync_state
     in
     let check_sync =
       let module F = HFOLD(SyncState) in
       let is_defined = function None -> false | _ -> true in
-      fun () -> F.fold {F.zero = true; F.succ = (fun x rest -> (is_defined !x) && (rest ()))} sync_state
+      fun () -> F.fold {F.zero = true; F.succ = (fun (_,x) rest -> (is_defined !x) && (rest ()))} sync_state
+    in
+    let push (type a) (s: a slot) x =
+      let module S = (val s) in S.push x
+    in
+    let push_all =
+      let module F = HFOLD(SyncState) in
+      F.fold {F.zero = (fun () -> ());
+              F.succ = (fun (s,st) rest ->
+                let next = rest () in
+                match !st with
+                | Some x -> (fun () -> push s x; next ())
+                | _ -> failwith "aligning: illegal sync state in push_all"
+        )} sync_state
+    in
+    let play_all =
+      let module M = HFOREACH(Suspensions) in
+      fun () -> M.foreach {M.f = fun s -> s.play ()} suspensions_ctx
     in
     let set st evt = match !st with
       | None -> st := Some evt
@@ -97,24 +115,25 @@ let aligning: type ctx xs a. (xs,ctx) Ptrs.hlist -> ctx Suspensions.hlist -> (ct
       if check_sync () then
         begin
           reset_sync_state ();
-          failwith "not implemented";
+          push_all ();
+          play_all ();
           k ()
         end
       else k ()
     in
-    let rec gen_handler: type c. c Slots.hlist -> c Suspensions.hlist -> c SyncState.hlist -> a handler = fun ctx ss sync ->
-      match ctx, ss, sync with
-      | Slots.Z, Suspensions.Z, SyncState.Z -> id_handler
-      | Slots.(S (slot, ctx)), Suspensions.(S (s,ss)), SyncState.(S (st,sts)) ->
+    let rec gen_handler: type c. c Suspensions.hlist -> c SyncState.hlist -> a handler = fun ss sync ->
+      match ss, sync with
+      | Suspensions.Z, SyncState.Z -> id_handler
+      | Suspensions.(S (s,ss)), SyncState.(S ((slot,st),sts)) ->
          let module S = (val slot) in
          let handler action =
            try action () with
            | effect (S.Push x) k ->
               s.pause (); set st x; try_release (continue k)
          in
-         handler |+| (gen_handler ctx ss sts)
+         handler |+| (gen_handler ss sts)
     in
-    gen_handler ctx suspensions_ctx sync_state)
+    gen_handler suspensions_ctx sync_state)
 
 (* There are interesting use cases for working with sets of pointers (apart from restrictions that
 need to refer to more than one slot), e.g., bulk application of a given restriction to multiple
