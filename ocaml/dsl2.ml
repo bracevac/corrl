@@ -20,7 +20,7 @@ module type Symantics = sig
   (* TODO: factor out the ops *)
   val (%>): time repr -> time repr -> bool repr
 
-  (* (\* uncurried version, requires tuples *\)
+  (* (\* old uncurried version, requires tuples *\)
    * type 'a ctx
    * val from: 'a r repr -> 'b ctx -> ('a * 'b) ctx
    * val nil: unit ctx
@@ -34,7 +34,8 @@ module type Symantics = sig
    * (\* question: should we wrap the function in a repr, as in the HOAS examples from tagless paper? *\)
    * val correlate: 'a ctx -> ('a tuple -> 'b evt repr) -> 'b r repr *)
 
-  type ('ctx,'res) q (* a query with binders 'ctx (which is a tuple evt repr elements) yielding a 'res r repr.*)
+  (* New uncurried version, does not require an explicit tuple GADT for multiple binders. *)
+  type ('ctx,'res) q (* a query with binders 'ctx (which is a tuple of evt repr elements) yielding a 'res r repr.*)
   val from: 'a r repr -> ('a evt repr,'res) q
   val (@.): ('a,'b) q -> ('c,'b) q -> ('a * 'c,'b) q
   val correlate: ('a,'b) q -> ('a -> 'b evt repr) -> 'b r repr
