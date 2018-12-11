@@ -35,10 +35,10 @@ module type Symantics = sig
    * val correlate: 'a ctx -> ('a tuple -> 'b evt repr) -> 'b r repr *)
 
   (* New uncurried version, does not require an explicit tuple GADT for multiple binders. *)
-  type ('ctx,'res) q (* a query with binders 'ctx (which is a tuple of evt repr elements) yielding a 'res r repr.*)
-  val from: 'a r repr -> ('a evt repr,'res) q
-  val (@.): ('a,'b) q -> ('c,'b) q -> ('a * 'c,'b) q
-  val correlate: ('a,'b) q -> ('a -> 'b evt repr) -> 'b r repr
+  type 'ctx q (* a query with binders 'ctx (which is a tuple of evt repr elements) *)
+  val from: 'a r repr -> 'a evt repr q
+  val (@.): 'a q -> 'b q -> ('a * 'b) q
+  val correlate: 'a q -> ('a -> 'b evt repr) -> 'b r repr
   (*TODO: it seems rhiger's pattern combinators could be what we need*)
 end
 
