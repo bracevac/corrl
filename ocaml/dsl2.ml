@@ -47,11 +47,11 @@ module type Symantics = sig
     an abstraction ('a -> 'b).
     Given that the ctx type is only formed by from and (@.) above, then
     we know that the variables have type 'a_i evt repr.
-    Effectively, we get a curried variant of higher order abstract syntax, e.g.,
+    Effectively, we get an uncurried variant of higher order abstract syntax, e.g.,
     'a ctx * ('a -> 'b repr) corresponds to an n-ary function taking a tuple  a_1 evt repr ... a_n evt repr
     to 'b repr. *)
   val correlate: 'a ctx -> ('a -> 'b evt repr) -> 'b r repr
-  (*TODO: it seems rhiger's pattern combinators could be what we need*)
+  (*TODO: there seems to be a connection to rhiger's pattern combinators*)
 
   val mouse: (int * int) r repr
   val key: int r repr
@@ -91,6 +91,8 @@ module Test(S:Symantics) = struct
    *         (yield (pair (value x) @@ pair (value y) (value z)))) *)
 end
 
+(* A DeBruijn version of event variables. We have to explicitly thread variable contexts through the
+   pattern body *)
 module type DeBruijnSymantics = sig
   type 'a ctx
   type 'a repr
@@ -98,30 +100,41 @@ module type DeBruijnSymantics = sig
   type 'a r
   type time
 
-  (* Variables are lookup functions on a context, by construction, lookup always succeeds *)
-  (*  type ('a,'b) var = 'b ctx -> 'a repr   *)
-  val vz: ('a evt repr * _) ctx -> 'a evt repr
-  val vs: ('r ctx -> 'a evt repr) -> (_ evt repr * 'r) ctx -> 'a evt repr
+  (* Correlation patterns are expressions with free event variables in context 'a yielding
+     a result of type 'b. *)
+  type ('a,'b) pat = 'a ctx -> 'b repr
 
-  val int: int -> 'a ctx -> int repr
-  val (<%): ('a ctx -> int repr) -> ('a ctx -> int repr) -> 'a ctx -> bool repr
-  val pair: ('a ctx -> 'b repr) -> ('a ctx -> 'c repr) -> 'a ctx -> ('b * 'c) repr
+  (* Variables are lookup functions on a context, by construction, lookup always succeeds *)
+  (* This variant separates variable formation from the pattern expressions.
+     Erasing this distinction would enable, e.g., explicit lifting of an expression into
+     a larger variable context via successor. We do not require such flexibility for now. *)
+  type ('a, 'b) var
+  val vz: ('a evt repr * _, 'a evt) var
+  val vs: ('r, 'a evt) var -> (_ evt repr * 'r, 'a evt) var
+  val (?!): ('a,'b) var -> ('a,'b) pat
+
+  val int: int -> ('a, int) pat
+  val (<%): ('a, int) pat -> ('a, int) pat -> ('a, bool) pat
+  val pair: ('a, 'b) pat -> ('a, 'c) pat -> ('a, ('b * 'c)) pat
   (* val bool: bool -> bool repr
    * val string: string -> string repr
    * val evt: 'a repr -> time repr -> 'a evt repr (\*TODO necessary?*\)
    * val pair: 'a repr -> 'b repr -> ('a * 'b) repr *)
 
-  val where: ('a ctx -> bool repr) -> ('a ctx -> 'b evt repr) -> 'a ctx -> 'b evt repr
-  val yield: ('a ctx -> 'b repr) -> 'a ctx -> 'b evt repr
+  val where: ('a, bool) pat -> ('a, 'b evt) pat -> ('a, 'b evt) pat
+  val yield: ('a, 'b) pat -> ('a, 'b evt) pat
+  val time: ('a, 'b evt) pat -> ('a, time) pat
+  val value: ('a, 'b evt) pat -> ('a, 'b) pat
 
-  val time: ('a ctx -> 'b evt repr) -> ('a ctx -> time repr)
-  val value: ('a ctx -> 'b evt repr) -> ('a ctx -> 'b repr)
   (* val (%>): time repr -> time repr -> bool repr *)
 
-  (* TODO it might make sense to make these context dependent too, e.g., for inlining optimizations  *)
+  (* context formation *)
+  (* a single binder, binding a reactive to an event variable of the same element type 'a. *)
   val from: 'a r repr -> ('a evt repr * unit) ctx
+  (* extend context by one binding, right associative *)
   val (@.): ('a * unit) ctx -> 'b ctx -> ('a * 'b) ctx
-  val correlate: 'a ctx -> ('a ctx -> 'b evt repr) -> 'b r repr
+
+  val correlate: 'a ctx -> ('a, 'b evt) pat -> 'b r repr
 
   val mouse: (int * int) r repr
   val key: int r repr
@@ -138,7 +151,7 @@ module TestDeBruijn(S:DeBruijnSymantics) = struct
       ((from a) @. (from b) @. (from c))
        (where
           ((int 1) <% (int 2))
-          (yield (pair (value vz) (pair (value (vs vz)) (value (vs (vs vz)))))))
+          (yield (pair (value ?!vz) (pair (value ?!(vs vz)) (value ?!(vs (vs vz)))))))
 
   (* unit ->
      ((((int * int) evt * (int evt * (int * int) evt)) evt repr *
@@ -148,4 +161,17 @@ module TestDeBruijn(S:DeBruijnSymantics) = struct
   let q2 () =
     correlate
       ((from (q mouse key mouse)) @. (from mouse) @. (from key))
+
+  let q3 x =
+    let r1 =
+      correlate
+        ((from mouse) @. (from mouse) @. (from mouse))
+        (where
+           ((int 1) <% (int 2))
+           (yield (pair (value ?!vz) (pair (value ?!(vs vz)) (value ?!(vs (vs vz)))))))
+    in let r2 =
+         correlate
+           ((from r1) @. (from x))
+           (yield (value ?!vz))
+       in (r1, r2)
 end
