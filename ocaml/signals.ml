@@ -19,7 +19,9 @@ module type Sym = sig
   val join: 'a ctx -> ('a -> 'b shape repr) -> 'b shape repr
 end
 
-type 'a signal = {push: 'a -> unit; subscribe: (unit -> unit) -> unit; pull: unit -> 'a}
+type 'a signal = {push: 'a -> unit;
+                  pull: unit -> 'a;
+                  subscribe: (unit -> unit) -> unit; }
 
 let make_signal : unit -> 'a signal = fun () ->
   let state = ref None in
@@ -35,17 +37,15 @@ let make_signal' v =
   s.push v;
   s
 
-(* HList of dynamically-bound channels. Dynamic binding is
-   implemented via reference cells *)
 module HL = HList(struct type 'a t = 'a end)
 let rec to_tuple: type a. a HL.hlist -> a =
   function
   | HL.Z -> ()
   | HL.S (x,xs) -> (x, to_tuple xs)
 
-module Signals = HList(struct type 'a t = 'a signal end)
-
 (* Simple dynamic binding *)
+(* HList of dynamically-bound channels. Dynamic binding is
+   implemented via reference cells *)
 type 'a dref = unit -> 'a
 module JoinState = HList(struct type 'a t = 'a dref end)
 let force () =
@@ -53,12 +53,6 @@ let force () =
   (fun state ->
     let values = M.map {M.f = fun dref -> dref ()} state
     in to_tuple values)
-
-
-let mk_state: type a. a Signals.hlist -> a JoinState.hlist =
-  fun signals ->
-  let module M = HMAP(Signals)(JoinState) in
-  M.map {M.f = fun s -> s.pull} signals
 
 let react: type a b. a JoinState.hlist -> (a -> b signal) -> b signal =
   fun join_state join_pattern ->
@@ -77,8 +71,7 @@ module SignalSym = struct
     s.push x;
     s
 
-  type _ var =
-    | Bind: 'a shape repr -> 'a elem repr var
+  type _ var = Bind: 'a shape repr -> 'a elem repr var
   module Ctx = HList(struct type 'a t = 'a var end)
 
   type 'a ctx = 'a Ctx.hlist
@@ -86,20 +79,26 @@ module SignalSym = struct
   let cnil = Ctx.nil
   let (@.) = (Ctx.cons)
 
-  let join_impl () =
-    let module M = HMAP(Ctx)(Signals) in
-    let module F = HFOREACH(Signals) in
-    let out_signal = make_signal () in
-    (fun ctx pattern ->
-      let signals = M.map {M.f = fun (Bind s) -> s } ctx in
-      let join_state = mk_state signals in
-      let callback () =
-        let s = react join_state pattern in
-        out_signal.push (s.pull ())
-      in
-      let _ = F.foreach {F.f = fun s -> s.subscribe (callback)} signals in
-      out_signal)
+  let mk_state: type a. a Ctx.hlist -> a JoinState.hlist =
+    fun ctx ->
+    let module M = HMAP(Ctx)(JoinState) in
+    M.map {M.f = fun (Bind s) -> s.pull} ctx
 
+  let subscribe_all: type a. a Ctx.hlist -> (unit -> unit) -> unit =
+    fun ctx callback ->
+    let module F = HFOREACH(Ctx) in
+    F.foreach {F.f = fun (Bind s) -> s.subscribe (callback)} ctx
+
+  let join_impl () = (fun ctx pattern ->
+    let out_signal = make_signal () in
+    let join_state = mk_state ctx in
+    let callback () =
+      let tuple = force () join_state in
+      let next_signal = pattern tuple in
+      out_signal.push (next_signal.pull ())
+    in
+    subscribe_all ctx callback;
+    out_signal)
   let join: type a b. a ctx -> (a -> b shape repr) -> b shape repr =
     fun ctx join_pattern -> join_impl () ctx join_pattern
 

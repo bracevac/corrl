@@ -1,8 +1,8 @@
 (env
   (dev
-    (flags (:standard -g -w -33 -warn-error -A)))
+    (flags (:standard -thread -g -w -33 -warn-error -A)))
   (release
-    (flags (:standard -O3))))
+    (flags (:standard -thread -O3))))
 
 (executable
   (name main)

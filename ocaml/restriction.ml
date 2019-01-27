@@ -5,23 +5,6 @@ open Core
 open Utility
 open Suspension
 
-module HListPtr(H: hlist) = struct (* TODO: replace HListP with this module in hlists.ml*)
-  open H
-
-  let rec proj : type a r. (a,r) ptr -> r hlist -> a el = fun n refs ->
-    match (n,refs) with
-    | (Here, S (f,_)) -> f
-    | (Next n, S (_,refs)) -> proj n refs
-
-  (* replacement *)
-  let rec rplc : type a r. (a,r) ptr -> r hlist -> a el -> r hlist =
-    fun n refs v ->
-      match (n,refs) with
-      | (Here, S (_,t))      -> S (v,t)
-      | (Next n, S (h,refs)) -> S(h,rplc n refs v)
-end
-
-
 (* How do we model access among a subset of an hlist? *)
 (* It seems, the dptr abstraction might come in handy! *)
 
