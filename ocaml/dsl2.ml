@@ -308,9 +308,9 @@ module InjectionExample = struct
     print_string (format v_i)
   let msg: string -> 'ctx ext = fun msg _ -> print_string msg
 
-  let show_string = show (fun (v,t) -> Printf.sprintf "(\"%s\",%d)" v t)
-  let show_int = show (fun (v,t) -> Printf.sprintf "(%d,%d)" v t)
-  let show_float = show (fun (v,t) -> Printf.sprintf "(%f,%d)" v t)
+  let show_string () = show (fun (v,t) -> Printf.sprintf "(\"%s\",%d)" v t)
+  let show_int () = show (fun (v,t) -> Printf.sprintf "(%d,%d)" v t)
+  let show_float () = show (fun (v,t) -> Printf.sprintf "(%f,%d)" v t)
 end
 
 module TestInject(S: InjectSymantics) = struct
@@ -331,9 +331,9 @@ module TestInst = struct
   open Hlists
   let test () =
     let ext = (msg "extension:\n")
-              |++| (show_int (Ptrs.n0 ()))
+              |++| (show_int () (Ptrs.n0 ()))
               |++| (msg " ")
-              |++| (show_string (Ptrs.n1 ()))
+              |++| (show_string () (Ptrs.n1 ()))
               |++| (msg "\n") in
     let s = exp [(1,1);(2,3);(3,5)] [("a",2);("b",4);("c",6);("d",8)] ext in
     let s2 =
