@@ -13,6 +13,7 @@ let () =
 #mod_use "count.ml";;
 #mod_use "delimcont.ml";;
 #mod_use "async.ml";;
+#mod_use "runtime.ml";;
 #mod_use "handlers.ml";;
 #mod_use "monad.ml";;
 #mod_use "hlists.ml";;
@@ -21,5 +22,6 @@ let () =
 #mod_use "slot.ml";;
 #mod_use "suspension.ml";;
 #mod_use "core.ml";;
+#mod_use "symantics.ml";;
 #mod_use "dsl.ml";;
 #mod_use "restriction.ml";;

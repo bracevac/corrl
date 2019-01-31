@@ -44,7 +44,7 @@ module Reactive = struct
     in Async.liftPromise (_toR l)
 
   let liftArray: 'a array -> 'a r = fun a ->
-    Async.liftPromise (Array.fold_right (fun x -> fun r -> RCons (x, (Async.liftPromise r))) a RNil)
+    Async.liftPromise (Array.fold_right (fun x r -> RCons (x, (Async.liftPromise r))) a RNil)
 
   let rec eat f stream =
     match Async.await stream with

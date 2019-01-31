@@ -41,5 +41,3 @@ let correlate (type a) n ?(with_sig: a join_sig option) =
       let module JoinN = JoinShape(JSig) in
       let streams = interleaved_bind slots JoinN.suspensions reacts in
       (fun () -> JoinN.run streams)) (* TODO this should be done asynchronously *)
-
-(* TODO: Could we have an applicative syntax? *)

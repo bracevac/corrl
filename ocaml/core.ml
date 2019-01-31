@@ -135,10 +135,7 @@ let interleaved_bind: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.h
 
 
 (* TODOs: *)
-(* Integrate w. new final tagless signature
+(* Dataflow network
+   Integrate w. new final tagless signature
    More tests for the aligning handler
-   Dataflow network (medium)
-   Comprehensions (medium)
-   Windows (medium)
-   Integrate suspension (low)
-   Implicits (very low)  *)
+   Windows (medium) *)
