@@ -20,11 +20,9 @@ let mkJoinSig: type a. a Slots.hlist -> a join_sig =
 
 
 let z k = k (Slots.nil, Reacts.nil)
-let s n k react =
-  let open Types in
-  let elem_typ: type a. a evt r typ -> a typ = (fun Typ -> Typ) in
+let s (type a) n k (react: a evt r) =
   n (fun (slots, reacts) ->
-      let slot = mk_slot (elem_typ (witness react)) in
+      let slot: a slot = mk_slot () in
       k (Slots.(cons slot slots), Reacts.(cons react reacts)))
 
 let zero  () = z
@@ -83,9 +81,7 @@ module Cartesius = struct
   let join: type s a b. (s, a) ctx -> s ext -> (a -> (s,b) pat) -> b shape repr = fun (_,ctx) ext body ->
     let open Types in
     let module M = HMAP(Ctx)(Slots) in
-    let witness: ('a,'b) var -> 'a typ = fun _ -> Typ in
-    let slots = M.map {M.f = fun var -> mk_slot (witness var) } ctx in
-    let yield_witness: b typ = Typ in
-    let yf = mk_yieldfail yield_witness in
+    let slots = M.map {M.f = fun var -> mk_slot ()} ctx in
+    let yf: b yieldfail = mk_yieldfail () in
     failwith "not implemented"
 end

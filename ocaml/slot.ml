@@ -1,5 +1,4 @@
 open Prelude
-open Types
 
 (* A slot x represents a binding 'x from ...' inside of a correlate block.
    Each binding has specific effects attached to it (generative effects).
@@ -15,15 +14,16 @@ module type SLOT = sig
 end
 type 'a slot = (module SLOT with type t = 'a)
 type slot_ex = (module SLOT)
-(* Create a slot instance from a value witnessing the type. *)
-let mk_slot (type s) (_: s typ) =
+let mk_slot: type a. unit -> a slot = fun () ->
   (module struct
-     type t = s
+     type t = a
      effect Push: t evt -> unit
      let push v = perform (Push v)
      effect GetMail: t mailbox
      let getMail () = perform GetMail
      effect SetMail: t mailbox -> unit
      let setMail v = perform (SetMail v)
-   end: (SLOT with type t = s))
-let mkSlot (type s) (t: s) = mk_slot (witness t)
+   end: (SLOT with type t = a))
+
+(* Create a slot instance from a value witnessing the type. *)
+let mkSlot: type t. t -> t slot = fun _ -> mk_slot ()

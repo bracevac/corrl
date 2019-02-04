@@ -17,11 +17,9 @@ let mkJoinSig: type a. a Slots.hlist -> a join_sig =
 
 
 let z k = k (Slots.nil, Reacts.nil)
-let s n k react =
-  let open Types in
-  let elem_typ: type a. a evt r typ -> a typ = (fun Typ -> Typ) in
+let s (type a) n k (react: a evt r)  =
   n (fun (slots, reacts) ->
-      let slot = mk_slot (elem_typ (witness react)) in
+      let slot: a slot = mk_slot () in
       k (Slots.(cons slot slots), Reacts.(cons react reacts)))
 
 let zero  () = z
