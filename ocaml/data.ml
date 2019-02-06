@@ -46,6 +46,11 @@ module Reactive = struct
   let liftArray: 'a array -> 'a r = fun a ->
     Async.liftPromise (Array.fold_right (fun x r -> RCons (x, (Async.liftPromise r))) a RNil)
 
+  let create: unit -> 'a r = Async.promise
+  let resolve_next: 'a r -> 'a -> 'a r = fun react v ->
+    let next = create () in
+    Async.resolve react (RCons (v,next));
+    next
   let rec eat f stream =
     match Async.await stream with
     | RCons (hd, tl) -> (f hd); eat f tl

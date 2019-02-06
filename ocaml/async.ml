@@ -6,6 +6,7 @@ type 'a _promise =
 
 type 'a promise = 'a _promise ref
 
+let promise () = ref (Waiting (Queue.create ()))
 let liftPromise x = ref (Done x)
 
 type 'a _channel =
@@ -32,11 +33,22 @@ let receive chan = perform (Receive chan)
 effect Emit: ('a channel * 'a) -> unit
 let emit chan v = perform (Emit (chan, v))
 
+(* Async scheduler state *)
 let q = Queue.create ()
 let enqueue t = Queue.push t q
 let dequeue () =
   if Queue.is_empty q then ()
   else Queue.pop q ()
+
+let resolve_internal pr v =
+  match !pr with
+  | Waiting q ->
+     pr := Done v;
+     Queue.iter (fun task -> enqueue (fun () -> continue task v)) q
+  | Done _ -> failwith "Promise already resolved"
+
+effect Resolve: ('a promise * 'a) -> unit
+let resolve p r = perform (Resolve (p,r))
 
 let run main =
   let rec schedule_next () = dequeue ()
@@ -46,14 +58,10 @@ let run main =
    * |  *)
   and fork : 'a. 'a promise -> (unit -> 'a) -> unit = fun pr main ->
     match main () with
-    | v ->
-      begin match !pr with
-        | Waiting q ->
-          pr := Done v;
-          Queue.iter (fun task -> enqueue (fun () -> continue task v)) q
-        | Done _ -> failwith "Promise already resolved"
-      end;
-      schedule_next ()
+    | v -> resolve_internal pr v; schedule_next ()
+
+    | effect (Resolve (p,v)) k ->
+       resolve_internal p v; continue k ()
 
     | effect (Async f) k ->
       let p = ref (Waiting (Queue.create ())) in

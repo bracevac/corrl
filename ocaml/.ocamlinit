@@ -9,7 +9,6 @@ let () =
 (* ## end of OPAM user-setup addition for ocamltop / base ## keep this line *)
 #thread;;
 #mod_use "utility.ml";;
-#mod_use "types.ml";;
 #mod_use "count.ml";;
 #mod_use "delimcont.ml";;
 #mod_use "async.ml";;

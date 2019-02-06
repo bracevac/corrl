@@ -11,6 +11,9 @@ val yield : unit -> unit
 (* Runs the scheduler *)
 val run   : (unit -> 'a) -> unit
 val liftPromise : 'a -> 'a promise
+val promise: unit -> 'a promise
+val resolve: 'a promise -> 'a -> unit
+val channel: unit -> 'a channel
 val emit : 'a channel -> 'a -> unit
 val receive: 'a channel -> 'a
 val interleaved : (unit -> unit) array -> unit

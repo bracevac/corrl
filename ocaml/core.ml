@@ -1,6 +1,7 @@
 open Prelude
 open Hlists
 open Slot
+open Yieldfail
 
 module Reacts = HList(struct type 'a t = 'a evt r end)
 module Events = HList(struct type 'a t = 'a evt end)
@@ -49,74 +50,67 @@ module Suspensions = struct
     | S (s,ss) -> s :: (to_list ss)
 end
 let mk_suspensions: type a. a Slots.hlist -> a Suspensions.hlist = fun slots ->
- let module M = HMAP(Slots)(Suspensions) in
- M.map {M.f = fun _ -> Suspension.mk ()} slots
+  let module M = HMAP(Slots)(Suspensions) in
+  M.map {M.f = fun _ -> Suspension.mk ()} slots
 
-(* We assume this will be generated from user query. *)
-module type JOIN = sig
-  type index
-  val slots: index Slots.hlist (* TODO do we really need slots here? Could it be not generated later on demand? *)
-  effect Trigger: index Events.hlist -> unit
-end
-type 'a join_sig = (module JOIN with type index = 'a)
 
 (* Arity generic join implementation. *)
-module JoinShape(J: JOIN) = struct
-  module Signature = J
-  let mboxes = Slots.mailboxes J.slots
-  let slot_list = Slots.abstract J.slots
-  let suspensions = mk_suspensions J.slots
-
-  let trigger tuple = perform (J.Trigger tuple)
 
   (* Handles the ambient mailbox state for each slot. *)
   (* Projecting to a uniformly-typed list of abstract SLOT modules makes it easier to generate handlers of
      generative effects.  *)
-  let memory () = Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
-                   let module S = (val s) in
-                   let mem: S.t mailbox ref = ref [] in
-                   (fun action ->
-                     try action () with
-                     | effect (S.GetMail) k -> continue k !mem
-                     | effect (S.SetMail l) k -> mem := l; continue k ()))
+let memory slot_list =
+  Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
+      let module S = (val s) in
+      let mem: S.t mailbox ref = ref [] in
+      (fun action ->
+        try action () with
+        | effect (S.GetMail) k -> continue k !mem
+        | effect (S.SetMail l) k -> mem := l; continue k ()))
 
   (* Default behavior: enqueue each observed event notification in the corresponding mailbox. *)
-  let forAll () = Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
-                   let module S = (val s) in
-                   (fun action ->
-                     try action () with
-                     | effect (S.Push x) k ->
-                        S.(setMail (((x, (ref Count.Inf)) :: (getMail ()))));
-                        continue k (S.push x)))
+let forAll slot_list =
+  Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
+      let module S = (val s) in
+      (fun action ->
+        try action () with
+        | effect (S.Push x) k ->
+           S.(setMail (((x, (ref Count.Inf)) :: (getMail ()))));
+           continue k (S.push x)))
 
   (* Implements the generic cartesian product.  *)
-  let reify () = Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
-                   let module S = (val s) in
-                   (fun action ->
-                     try action () with
-                     | effect (S.Push x) k ->
-                        let entry = List.find (fun (y,_) -> y = x) (S.getMail ()) in
-                        let mail = begin
-                            try MailboxDrefs.force mboxes with
-                            | effect (S.GetMail) k -> continue k [entry] (*TODO would make more sense if the life counter was offered already in the push message *)
-                          end
-                        in
-                        List.iter (trigger) (Mailboxes.cart mail (fun x -> [x])); (* TODO make cart consider the life counters. *)
-                        continue k ()))
+let reify slot_list mboxes consumer =
+  Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
+      let module S = (val s) in
+      (fun action ->
+        try action () with
+        | effect (S.Push x) k ->
+           let entry = List.find (fun (y,_) -> y = x) (S.getMail ()) in
+           let mail = begin
+               try MailboxDrefs.force mboxes with
+               | effect (S.GetMail) k -> continue k [entry] (*TODO would make more sense if the life counter was offered already in the push message *)
+             end
+           in
+           (* For simplicity, we supply a consumer function for the tuples. In the paper, we provisioned a dedicated trigger effect for signaling each tuple. *)
+           List.iter consumer (Mailboxes.cart mail (fun x -> [x])); (* TODO make cart consider the life counters. *)
+           continue k ()))
 
-  (* To join means applying this stack of effect handlers to a computation generating push notifications.
-     If we had effect types, then the join would be an elimination form of all generative push effects
-     S1.Push ... Sn.Push in the slots hlist. *)
-  let run action =
-    Handlers.with_hs [(memory ());(reify ());(forAll ())] action
-end
+let join_shape slots restriction consumer =
+  let module SMBD = HMAP(Slots)(MailboxDrefs) in
+  let module FS = HFOLD(Slots) in
+  let mboxes = SMBD.(map {f = fun s -> (getMail_of s) }) slots in
+  let slot_list: slot_ex list = FS.(fold {zero = []; succ = fun s next -> (Obj.magic s) :: (next ()) }) slots in
+  (memory slot_list)
+  |+| (reify slot_list mboxes consumer)
+  |+| restriction
+  |+| (forAll slot_list)
 
 (* Generates the interleaved push iterations over n reactives *)
 let interleaved_bind: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> unit -> unit =
   let rec thunk_list: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> (unit -> unit) list =
     fun slots suspensions ->
     match slots, suspensions with
-    | Slots.Z, Suspensions.Z  -> (fun Reacts.Z -> [])
+    | Slots.Z, Suspensions.Z -> (fun Reacts.Z -> [])
     | Slots.(S (s,ss)), Suspensions.(S (c,cs)) ->
        let module S = (val s) in
        let suspendable_strand r () =
@@ -132,11 +126,9 @@ let interleaved_bind: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.h
       let mk_thunks = thunk_list slots suspensions in
       fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs))) (* TODO: generate the array right away *)
 
-
-
 (* TODOs: *)
-(* Dataflow network
-   Integrate w. new final tagless signature
-   More tests for the aligning handler
+(* More tests for the aligning handler
    Windows (medium)
-   Optimizations in the tagless representation? *)
+   Optimizations in the tagless representation?
+   Integrate external I/O (low)
+*)

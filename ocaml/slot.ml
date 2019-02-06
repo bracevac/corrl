@@ -27,3 +27,15 @@ let mk_slot: type a. unit -> a slot = fun () ->
 
 (* Create a slot instance from a value witnessing the type. *)
 let mkSlot: type t. t -> t slot = fun _ -> mk_slot ()
+
+let getMail_of: type a. a slot -> unit -> a mailbox = fun s ->
+  let module S = (val s) in
+  (S.getMail)
+
+let setMail_of: type a. a slot -> a mailbox -> unit = fun s ->
+  let module S = (val s) in
+  (S.setMail)
+
+let push_of: type a. a slot -> a evt -> unit = fun s ->
+  let module S = (val s) in
+  (S.push)

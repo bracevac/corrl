@@ -13,9 +13,8 @@ module SuspensionsPtr = HListPs(Suspensions)
 
 
 (* TODO: this should move *)
-type 'a ctx = 'a Slots.hlist
 type 'a handler = (unit -> 'a) -> 'a
-type ('c,'a) chandler = 'c ctx -> 'a handler
+type ('c,'a) chandler = 'c Slots.hlist -> 'a handler
 let (|++|):  type c a. (c, a) chandler -> (c, a) chandler -> (c, a) chandler =
   (fun h1 h2 ctx -> (h1 ctx) |+| (h2 ctx))
 let id_handler action = action ()
