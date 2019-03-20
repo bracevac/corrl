@@ -49,12 +49,15 @@ module TestFoo(F: Foo) = struct
                      where (bool true)
                        (yield (pair z (pair x y))))))
 
+  let (@&) a b = Ptrs.(cons a b)
+
   let test2 a b c d =
+    let open Ptrs in
     join ((from (test a b c)) @. (from b) @. (from c) @. (from d) @. cnil)
       (disj
-         ((Ptrs.(cons n0 @@ cons n2 @@ nil ()) |>| (fun (x,(y,())) -> yield (bool true)))
-       |. (Ptrs.(cons n1 @@ cons n2 @@ cons n3 @@ nil ()) |>| (fun (x,(y,(z,()))) -> yield (bool false)))
-       |. (Ptrs.(cons n3 @@ nil ()) |>| (fun (z,()) -> yield (bool false))) ))
+         (((n0 @& n2 @& nil ()) |>| (fun (x,(y,())) -> yield (bool true)))
+       |. ((n1 @& n2 @& n3 @& nil ()) |>| (fun (x,(y,(z,()))) -> yield (bool false)))
+       |. ((n3 @& nil ()) |>| (fun (z,()) -> yield (bool false))) ))
 
 
 end
