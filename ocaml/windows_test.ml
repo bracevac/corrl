@@ -55,9 +55,7 @@ module TestFoo(F: Foo) = struct
     let open Ptrs in
     join ((from (test a b c)) @. (from b) @. (from c) @. (from d) @. cnil)
       (disj
-         (((n0 @& n2 @& nil ()) |>| (fun (x,(y,())) -> yield (bool true)))
+         (((n0 @& n2 @& nil ())       |>| (fun (x,(y,()))     -> yield (bool true)))
        |. ((n1 @& n2 @& n3 @& nil ()) |>| (fun (x,(y,(z,()))) -> yield (bool false)))
-       |. ((n3 @& nil ()) |>| (fun (z,()) -> yield (bool false))) ))
-
-
+       |. ((n3 @& nil ())             |>| (fun (z,())         -> yield (bool false))) ))
 end
