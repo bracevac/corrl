@@ -31,3 +31,8 @@ for the last working version.
 **Versatile Event Correlation with Algebraic Effects** (ICFP 2018)
 by Oliver Bračevac, Nada Amin, Guido Salvaneschi, Sebastian Erdweg, Patrick Eugster and Mira Mezini
 ([pdf](https://dl.acm.org/citation.cfm?id=3236762)).
+
+
+**Type-safe, Polyvariadic Event Correlation** (draft, 2019)
+by Oliver Bračevac, Guido Salvaneschi, Sebastian Erdweg and Mira Mezini
+([pdf](http://www.st.informatik.tu-darmstadt.de/artifacts/corrl/polyjoin_draft.pdf)).
