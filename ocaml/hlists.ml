@@ -110,6 +110,20 @@ end
 
 module HListPs(H: hlist) = struct
   include HListP(H)
+
+  let rec mproj: type xs ctx. (xs,ctx) Ptrs.hlist -> ctx hlist -> xs hlist =
+    fun mptr hlist ->
+      match mptr with
+      | Ptrs.Z -> nil
+      | Ptrs.(S (i,ps)) -> cons (proj i hlist) (mproj ps hlist)
+
+  let mz () = Ptrs.Z
+  let ms p ps = Ptrs.(S (p (), ps))
+
+  let mz' () = Ptrs.Z
+  let ms' p ps () = Ptrs.(S (p (), ps ()))
+
+
   let proj_ptrs: type xs ctx. ctx hlist -> (xs,ctx) Ptrs.hlist -> xs hlist = fun hs ->
     let rec aux: type xs. (xs,ctx) Ptrs.hlist -> xs hlist =
       function
@@ -120,6 +134,45 @@ module HListPs(H: hlist) = struct
 end
 
 module HLP = HListP(HL)
+module HLPs = HListPs(HL)
+
+
+module Paper = struct
+  type (_,_) _ptr =
+    | Pz: ('a,'a * 'b) _ptr
+    | Ps: ('a,'b) _ptr -> ('a, 'c * 'b) _ptr
+
+  type ('a,'b) ptr = unit -> ('a,'b) _ptr
+
+  type (_,'a) _mptr =
+    | Mz: (unit, 'a) _mptr
+    | Ms: (('c, 'b) _ptr * ('a, 'b) _mptr) -> ('c * 'a, 'b) _mptr
+
+  type ('a,'b) mptr = unit -> ('a,'b) _mptr
+
+  let mz () = Mz
+  let ms p ps () = Ms (p (), ps ())
+  let n0 () = Pz
+  let n1 () = Ps Pz
+  let n2 () = Ps (Ps Pz)
+  let n3 () = Ps (Ps (Ps Pz))
+  let n4 () = Ps (Ps (Ps (Ps Pz)))
+  let n5 () = Ps (Ps (Ps (Ps (Ps Pz))))
+
+  let testm: ('a * ('b * unit), 'b * ('c * ('a * 'd))) mptr = fun () -> (ms n2 @@ ms n0 @@ mz) ()
+
+  let testm2: ('a * ('b * unit), 'b * ('c * ('a * unit))) mptr = testm
+
+  let rec proj: type a ctx. (a,ctx) _ptr -> ctx HL.hlist -> a HL.el =
+    fun n hlist -> match n, hlist with
+                   | Pz, HL.S (hd, _) -> hd
+                   | Ps n, HL.S (_, tl) -> proj n tl
+
+  let rec mproj: type xs ctx. (xs, ctx) _mptr -> ctx HL.hlist -> xs HL.hlist =
+    fun mptr hlist -> match mptr with
+                      | Mz -> HL.nil
+                      | Ms (i,ps) -> HL.cons (proj i hlist) (mproj ps hlist)
+end
 
 
 (* HList of lists *)
