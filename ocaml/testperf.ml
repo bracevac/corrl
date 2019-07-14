@@ -93,7 +93,8 @@ let event_count = 1000
 
 (* First, do some things by hand *)
 let ccons s c = CB.(from s @. (c ()))
-let ctx1 () = ccons (rand_stream event_count) (fun () -> CB.cnil)
+let ctx0 () = CB.cnil
+let ctx1 () = ccons (rand_stream event_count) ctx0
 let ext1_0 () = CB.empty_ext
 let ext1_1 () = most_recently Here
 let ext1_2 () = affinely 1 Here
@@ -129,6 +130,59 @@ let pat3: ((int * Prelude.Interval.time) *
 let join3_0 () = CB.join (ctx3 ()) (ext3_0 ()) pat3
 let join3_1 () = CB.join (ctx3 ()) (ext3_1 ()) pat3
 let join3_2 () = CB.join (ctx3 ()) (ext3_2 ()) pat3
+
+module Generator = struct
+  type variant = int -> string
+
+  effect Emit: string -> unit
+  let emit s = perform (Emit s)
+
+  let rand_stream = "(rand_stream event_count)"
+  let ctx i = emit (Printf.sprintf "let ctx%d () = ccons %s ctx%d\n" i rand_stream (i-1))
+  let ext i j v = emit (Printf.sprintf "let ext%d_%d () = %s\n" i j v)
+  let rec pat_dom = function
+    | 0 -> emit "unit"
+    | j when j > 0 -> emit "((int * Prelude.Interval.time) * "; (pat_dom (j - 1)); emit ")"
+  let pat_cod i =
+    let rec shape = function
+      | 0 -> emit "unit"
+      | j when j > 0 -> emit "(int * "; (shape (j - 1)); emit ")"
+    in
+    let rec typ = function
+      | 0 -> emit "int"
+      | j when j > 0 -> emit "(int * "; (typ (j - 1)); emit ")"
+    in
+    emit "("; (shape i); emit ", "; (typ (i - 1)); emit ") CB.pat"
+  let rec pat_args = function
+    | 0 -> emit "()"
+    | j when j > 0 -> emit "("; emit "("; emit (Printf.sprintf "x%d" j);  emit ",_), "; (pat_args (j - 1)); emit ")"
+  let rec pat_body = function
+    | 1 -> emit "x1"
+    | j when j > 1 -> emit "(pair "; emit (Printf.sprintf "x%d " j); (pat_body (j - 1)); emit ")"
+  let pat i =
+    emit (Printf.sprintf "let pat%d: " i);
+    (pat_dom i); emit " -> "; (pat_cod i); emit " =\n";
+    emit "  fun "; (pat_args i); emit " -> CB.(yield "; (pat_body i); emit ")\n"
+  let join i j = emit (Printf.sprintf "let join%d_%d () = CB.join (ctx%d ()) (ext%d_%d ()) pat%d" i j i i j i)
+
+
+  let gen: int -> variant list -> Buffer.t = fun n variants ->
+    let _ = if n < 1 then failwith "Need arity >= 1" in
+    let variants = (fun _ -> "CB.empty_ext") :: variants in
+    let buffer = Buffer.create (16384 + 1024 * (List.length variants)) in
+    let mk () =
+      for i = 1 to n do
+        (ctx i);
+        List.iteri (fun j v -> ext i j (v j)) variants;
+        pat i;
+        List.iteri (fun j _ -> join i j);
+        emit "\n"
+      done
+    in
+    match mk () with
+    | () -> buffer
+    | effect (Emit s) k -> Buffer.add_string buffer s; continue k ()
+end
 
 
 (* module Join3Bench: (JOIN with type joined = int evt * int evt * int evt
