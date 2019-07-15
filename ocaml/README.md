@@ -2,12 +2,7 @@
 
 ## Prerequisites
 
-Install Multicore OCaml
-
-```
-$ opam remote add ocamllabs -k git https://github.com/ocamllabs/opam-repo-dev
-$ opam switch 4.04.2+ber-multicore
-```
+Install multicore OCaml from [the offical opam repository](https://github.com/ocaml-multicore/multicore-opam).
 
 ## For Emacs use
 
@@ -23,25 +18,26 @@ $ opam install merlin user-setup
 
 ### In Emacs
 
-*TODO:* Currently not working properly, need to make merlin
-aware of multiple project files.
-
 Open `main.ml`, type `C-c C-b Ret` to load. 
 Drawback of using tuareg: Error reporting nearly useless, as only the
 absolute (!) character position is reported.
+Consider using a shell within Emacs with the `dune` or REPL options below.
 
 If changes are made, I recommend a complete reload:
 Kill tuareg's REPL first with `C-c C-k` and then 
 reload with `C-c C-b Ret` again.
 
-Note: Be sure that the `.ocamlinit` properly loads
-the required `*.ml` via `#mod_use`.
+Note: If you add new files, Be sure that the local `.ocamlinit` 
+file in this repository properly loads the required `*.ml` files,
+via the `#mod_use` directive.
 
 ### In a shell, using dune
 
 ```
-$ opam install dune
+$ opam install dune.1.2.1
 ```
+
+(Note: newer versions of `dune` [do not yet work](https://github.com/ocaml-multicore/ocaml-multicore/issues/234) with multicore OCaml)
 
 Building with `dev` profile (the default, includes debugging information)
 
