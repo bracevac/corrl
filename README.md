@@ -35,4 +35,4 @@ by Oliver Bračevac, Nada Amin, Guido Salvaneschi, Sebastian Erdweg, Patrick Eug
 
 **Type-safe, Polyvariadic Event Correlation** (draft, 2019)
 by Oliver Bračevac, Guido Salvaneschi, Sebastian Erdweg and Mira Mezini
-([pdf](http://www.st.informatik.tu-darmstadt.de/artifacts/corrl/polyjoin_draft.pdf)).
+([pdf](https://arxiv.org/abs/1907.02990)).
