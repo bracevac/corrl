@@ -41,10 +41,13 @@ module CartesiusTests = struct
   (* TODO define syntax extensions for restriction handlers*)
   include Tests(Cartesius)
   open Cartesius
+  open HPointers
+  open HPointers.Vals
+
   let test_join4_most_recently () =
-    let two   = Ptrs.n1 () in
-    let three = Ptrs.n2 () in
-    let four  = Ptrs.n3 () in
+    let two   = n1 in
+    let three = n2 in
+    let four  = n3 in
     join
       ((from r0) @. (from r1) @. (from r2) @. (from r3) @. cnil)
       ((most_recently four)
@@ -53,6 +56,13 @@ module CartesiusTests = struct
       (fun ((x0,_), ((x1,_), ((x2,_), ((x3,_), ())))) ->
         yield (pair x0 (pair x1 (pair x2 x3))))
 
+  let test_join3_zip () =
+    let ps = (ms n0 @@ ms n1 @@ ms n2 mz) in
+    join
+      ((from r1) @. (from r2) @. (from r3) @. cnil)
+      ((most_recently n0) |++| (most_recently n1) |++| (most_recently n2) |++| (aligning ps))
+      (fun ((x1,_), ((x2,_), ((x3,_), ()))) ->
+        yield (pair x1 (pair x2 x3)))
 
 end
 

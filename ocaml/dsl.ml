@@ -41,10 +41,10 @@ module Cartesius = struct
 
   (* extensions as slot-dependent restriction handlers *)
   type 'a handler = (unit -> 'a) -> 'a
-  type 'ctx ext = 'ctx Slots.hlist -> unit handler
-  let empty_ext: 'ctx ext = fun _ action -> action ()
-  let (|++|): 'ctx ext -> 'ctx ext -> 'ctx ext = fun h h' ctx ->
-    Handlers.((h ctx) |+| (h' ctx))
+  type 'ctx ext = 'ctx Slots.hlist -> 'ctx Suspensions.hlist -> unit handler
+  let empty_ext: 'ctx ext = fun _ _ action -> action ()
+  let (|++|): 'ctx ext -> 'ctx ext -> 'ctx ext = fun h h' ctx susp ->
+    Handlers.((h ctx susp) |+| (h' ctx susp))
 
   (* turns yielded event tuples from hlist form into the naked tuple and meta data context, to be passed into the join pattern. *)
   let rec decompose: type s a. (s,a) ctx -> s Events.hlist -> a * s MCtx.hlist = fun ctx tuple ->
@@ -62,9 +62,10 @@ module Cartesius = struct
     let module M = HMAP(Ctx)(Slots) in
     let module MCR = HMAP(Ctx)(Reacts) in
     let slots = M.map {M.f = fun _ -> mk_slot ()} ctx in
+    let suspensions = mk_suspensions slots in
     let yf: b yieldfail = mk_yieldfail () in
     let module YF = (val yf) in
-    let join_handler = join_shape slots (ext slots) (fun tuple ->
+    let join_handler = join_shape slots (ext slots suspensions) (fun tuple ->
                            try
                              begin
                                let (vars,metas) = decompose tuple in
@@ -74,7 +75,6 @@ module Cartesius = struct
                            with
                            | effect YF.Fail _ -> ())
     in
-    let suspensions = mk_suspensions slots in
     let inputs = MCR.(map {f = fun (Bind r) -> r}) ctx in
     let streams = interleaved_bind slots suspensions inputs in
     let out: b evt r = Reactive.create () in
