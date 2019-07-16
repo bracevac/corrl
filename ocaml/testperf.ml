@@ -91,45 +91,45 @@ let randArray n =
 let event_count = 1000
 
 
-(* First, do some things by hand *)
-let ccons s c = CB.(from s @. (c ()))
-let ctx0 () = CB.cnil
-let ctx1 () = ccons (rand_stream event_count) ctx0
-let ext1_0 () = CB.empty_ext
-let ext1_1 () = most_recently Here
-let ext1_2 () = affinely 1 Here
-(* let ext1_3 () = affinely 1 Here  TODO: integration of aligning *)
-let pat1: ((int * Prelude.Interval.time) * unit) -> (int * unit, int) CB.pat =
-  fun ((x1,_), ()) -> CB.(yield x1)
-let join1_0 () = CB.join (ctx1 ()) (ext1_0 ()) pat1
-let join1_1 () = CB.join (ctx1 ()) (ext1_1 ()) pat1
-let join1_2 () = CB.join (ctx1 ()) (ext1_2 ()) pat1
-
-let ctx2 () = ccons (rand_stream event_count) ctx1
-let ext2_0 () = CB.empty_ext
-let ext2_1 () = CB.((most_recently Here) |++| (most_recently (Next Here)))
-let ext2_2 () = CB.((affinely 1 Here) |++| (affinely 1 (Next Here)))
-(* let ext1_3 () = affinely 1 Here  TODO: integration of aligning *)
-let pat2: ((int * Prelude.Interval.time) *
-             ((int * Prelude.Interval.time) *
-                unit)) -> (int * (int * unit), (int * int)) CB.pat =
-  fun ((x1,_), ((x2,_), ())) -> CB.(yield (pair x1 x2))
-let join2_0 () = CB.join (ctx2 ()) (ext2_0 ()) pat2
-let join2_1 () = CB.join (ctx2 ()) (ext2_1 ()) pat2
-let join2_2 () = CB.join (ctx2 ()) (ext2_2 ()) pat2
-
-let ctx3 () = ccons (rand_stream event_count) ctx2
-let ext3_0 () = CB.empty_ext
-let ext3_1 () = CB.((most_recently Here) |++| (most_recently (Next Here)) |++| (most_recently (Next (Next Here))))
-let ext3_2 () = CB.((affinely 1 Here) |++| (affinely 1 (Next Here)) |++| (affinely 1 (Next (Next Here))))
-(* let ext1_3 () = affinely 1 Here  TODO: integration of aligning *)
-let pat3: ((int * Prelude.Interval.time) *
-             ((int * Prelude.Interval.time) *
-                ((int * Prelude.Interval.time) * unit))) -> (int * (int * (int * unit)), (int * (int * int))) CB.pat =
-            fun ((x1,_), ((x2,_), ((x3,_), ()))) -> CB.(yield (pair x1 (pair x2 x3)))
-let join3_0 () = CB.join (ctx3 ()) (ext3_0 ()) pat3
-let join3_1 () = CB.join (ctx3 ()) (ext3_1 ()) pat3
-let join3_2 () = CB.join (ctx3 ()) (ext3_2 ()) pat3
+(* Here is a manual expansion of what we generate *)
+(* let ccons s c = CB.(from s @. (c ()))
+ * let ctx0 () = CB.cnil
+ * let ctx1 () = ccons (rand_stream event_count) ctx0
+ * let ext1_0 () = CB.empty_ext
+ * let ext1_1 () = most_recently Here
+ * let ext1_2 () = affinely 1 Here
+ * (\* let ext1_3 () = affinely 1 Here  TODO: integration of aligning *\)
+ * let pat1: ((int * Prelude.Interval.time) * unit) -> (int * unit, int) CB.pat =
+ *   fun ((x1,_), ()) -> CB.(yield x1)
+ * let join1_0 () = CB.join (ctx1 ()) (ext1_0 ()) pat1
+ * let join1_1 () = CB.join (ctx1 ()) (ext1_1 ()) pat1
+ * let join1_2 () = CB.join (ctx1 ()) (ext1_2 ()) pat1
+ *
+ * let ctx2 () = ccons (rand_stream event_count) ctx1
+ * let ext2_0 () = CB.empty_ext
+ * let ext2_1 () = CB.((most_recently Here) |++| (most_recently (Next Here)))
+ * let ext2_2 () = CB.((affinely 1 Here) |++| (affinely 1 (Next Here)))
+ * (\* let ext1_3 () = affinely 1 Here  TODO: integration of aligning *\)
+ * let pat2: ((int * Prelude.Interval.time) *
+ *              ((int * Prelude.Interval.time) *
+ *                 unit)) -> (int * (int * unit), (int * int)) CB.pat =
+ *   fun ((x1,_), ((x2,_), ())) -> CB.(yield (pair x1 x2))
+ * let join2_0 () = CB.join (ctx2 ()) (ext2_0 ()) pat2
+ * let join2_1 () = CB.join (ctx2 ()) (ext2_1 ()) pat2
+ * let join2_2 () = CB.join (ctx2 ()) (ext2_2 ()) pat2
+ *
+ * let ctx3 () = ccons (rand_stream event_count) ctx2
+ * let ext3_0 () = CB.empty_ext
+ * let ext3_1 () = CB.((most_recently Here) |++| (most_recently (Next Here)) |++| (most_recently (Next (Next Here))))
+ * let ext3_2 () = CB.((affinely 1 Here) |++| (affinely 1 (Next Here)) |++| (affinely 1 (Next (Next Here))))
+ * (\* let ext1_3 () = affinely 1 Here  TODO: integration of aligning *\)
+ * let pat3: ((int * Prelude.Interval.time) *
+ *              ((int * Prelude.Interval.time) *
+ *                 ((int * Prelude.Interval.time) * unit))) -> (int * (int * (int * unit)), (int * (int * int))) CB.pat =
+ *             fun ((x1,_), ((x2,_), ((x3,_), ()))) -> CB.(yield (pair x1 (pair x2 x3)))
+ * let join3_0 () = CB.join (ctx3 ()) (ext3_0 ()) pat3
+ * let join3_1 () = CB.join (ctx3 ()) (ext3_1 ()) pat3
+ * let join3_2 () = CB.join (ctx3 ()) (ext3_2 ()) pat3 *)
 
 module Generator = struct
   type variant = int -> string
@@ -175,7 +175,7 @@ module Generator = struct
         (ctx i);
         List.iteri (fun j v -> ext i j (v j)) variants;
         pat i;
-        List.iteri (fun j _ -> join i j);
+        List.iteri (fun j _ -> join i j) variants;
         emit "\n"
       done
     in
