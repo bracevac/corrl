@@ -1,22 +1,20 @@
 open Prelude
 open Hlists
+open HPointers
 open Slot
 open Core
 open Utility
 open Suspension
 
-(* How do we model access among a subset of an hlist? *)
-(* It seems, the dptr abstraction might come in handy! *)
-
-module SlotsPtr = HListPs(Slots) (* TODO should this be part of Core? *)
-module SuspensionsPtr = HListPs(Suspensions)
+module SlotsPtr = HPointers.Proj(Slots) (* TODO should this be part of Core? *)
+module SuspensionsPtr = HPointers.Proj(Suspensions)
 
 
 (* TODO: this should move *)
 type 'a handler = (unit -> 'a) -> 'a
-type ('c,'a) chandler = 'c Slots.hlist -> 'a handler
+type ('c,'a) chandler = 'c Slots.hlist -> 'c Suspensions.hlist -> 'a handler
 let (|++|):  type c a. (c, a) chandler -> (c, a) chandler -> (c, a) chandler =
-  (fun h1 h2 ctx -> (h1 ctx) |+| (h2 ctx))
+  (fun h1 h2 ctx susp -> (h1 ctx susp) |+| (h2 ctx susp))
 let id_handler action = action ()
 
 (* Important: we want the handlers to be *indexed* by the generative effects (context so to speak).
@@ -24,9 +22,9 @@ let id_handler action = action ()
  context-accepting functions producing effect handlers! *)
 
 let most_recently: type ctx i a. (i,ctx) ptr -> (ctx,a) chandler =
-  (fun ptr slots ->
+  (fun ptr slots _ ->
     (* TODO: we could further decouple the access logic from the impl *)
-    let module S = (val (SlotsPtr.proj ptr slots)) in
+    let module S = (val (SlotsPtr.proj (ptr ()) slots)) in
     (fun action ->
       try action () with
       | effect (S.Push x) k ->
@@ -37,8 +35,8 @@ let most_recently: type ctx i a. (i,ctx) ptr -> (ctx,a) chandler =
          continue k (S.push x)))
 
 let affinely: type ctx i a. int -> (i,ctx) ptr -> (ctx,a) chandler =
-  (fun n ptr slots ->
-    let module S = (val (SlotsPtr.proj ptr slots)) in
+  (fun n ptr slots _ ->
+    let module S = (val (SlotsPtr.proj (ptr ()) slots)) in
     let update mbox ev cv =
       update_first (fun (y,_) -> ev = y)
         (fun (x,c) -> c := cv; (x,c))
@@ -53,10 +51,10 @@ let affinely: type ctx i a. int -> (i,ctx) ptr -> (ctx,a) chandler =
 (* TODO: can we express requirements on shape of context, but what about the *capabilities* of each context element?
 Sam's paper on holes might be the solution! Also: couldn't we model a poor man's effect type system this way?
 For now, we assume that all slots have the capability of supension/resumption. *)
-let aligning: type ctx xs a. (xs,ctx) Ptrs.hlist -> ctx Suspensions.hlist -> (ctx,a) chandler = (* TODO the chandler type should carry the suspension context *)
-  (fun ptrs suspensions ctx ->
-    let suspensions_ctx = SuspensionsPtr.proj_ptrs suspensions ptrs in
-    let ctx = SlotsPtr.proj_ptrs ctx ptrs in
+let aligning: type ctx xs a. (xs,ctx) mptr -> (ctx,a) chandler = (* TODO the chandler type should carry the suspension context *)
+  (fun ptrs ctx suspensions ->
+    let suspensions_ctx = SuspensionsPtr.mproj (ptrs ()) suspensions in
+    let ctx = SlotsPtr.mproj (ptrs ()) ctx in
     let module Cells = HList(struct type 'a t = 'a evt option ref end) in
     let module SyncState = HZIP(Slots)(Cells) in
     let sync_state = (* TODO: it might be more clever to have suspension accept callbacks for resumption. *)

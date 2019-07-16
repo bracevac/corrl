@@ -69,109 +69,49 @@ end
 (* Simple HList, just for elements of type 'a *)
 module HL = HList(struct type 'a t = 'a end)
 
-(* a pointer into an HList *)
-type (_,_) ptr =
-  | Here : ('a,'a*_) ptr
-  | Next : ('a,'r) ptr -> ('a,_*'r) ptr
-
-(* Multisets of pointers *)
-module Ptrs = struct
-  (* Second type parameter enforces that all pointers point into the same context. *)
-  type (_,'a) hlist =
-    | Z: (unit,'a) hlist
-    | S: (('i,'a) ptr * ('j,'a) hlist) -> ('i * 'j, 'a) hlist
-
-  let nil () = Z
-  let cons p ps = S (p (), ps) (* Note the difference to other hlists, which is due to the value restriction *)
-
-  let n0 () = Here
-  let n1 () = Next Here
-  let n2 () = Next (Next Here)
-  let n3 () = Next (Next (Next Here))
-  let n4 () = Next (Next (Next (Next Here)))
-  let n5 () = Next (Next (Next (Next (Next Here))))
-end
-
-module HListP(H: hlist) = struct
-  include H
-
-  let rec proj : type a r. (a,r) ptr -> r hlist -> a el = fun n refs ->
-    match (n,refs) with
-    | (Here, S (f,_)) -> f
-    | (Next n, S (_,refs)) -> proj n refs
-
-  (* replacement *)
-  let rec rplc : type a r. (a,r) ptr -> r hlist -> a el -> r hlist =
-    fun n refs v ->
-      match (n,refs) with
-      | (Here, S (_,t))      -> S (v,t)
-      | (Next n, S (h,refs)) -> S(h,rplc n refs v)
-end
-
-module HListPs(H: hlist) = struct
-  include HListP(H)
-
-  let rec mproj: type xs ctx. (xs,ctx) Ptrs.hlist -> ctx hlist -> xs hlist =
-    fun mptr hlist ->
-      match mptr with
-      | Ptrs.Z -> nil
-      | Ptrs.(S (i,ps)) -> cons (proj i hlist) (mproj ps hlist)
-
-  let mz () = Ptrs.Z
-  let ms p ps = Ptrs.(S (p (), ps))
-
-  let mz' () = Ptrs.Z
-  let ms' p ps () = Ptrs.(S (p (), ps ()))
-
-
-  let proj_ptrs: type xs ctx. ctx hlist -> (xs,ctx) Ptrs.hlist -> xs hlist = fun hs ->
-    let rec aux: type xs. (xs,ctx) Ptrs.hlist -> xs hlist =
-      function
-      | Ptrs.Z -> nil
-      | Ptrs.(S (i,ps)) -> cons (proj i hs) (aux ps)
-    in
-    aux
-end
-
-module HLP = HListP(HL)
-module HLPs = HListPs(HL)
-
-
-module Paper = struct
+module HPointers = struct
+  (* Points-into relation *)
   type (_,_) _ptr =
     | Pz: ('a,'a * 'b) _ptr
     | Ps: ('a,'b) _ptr -> ('a, 'c * 'b) _ptr
 
+  (* For encoding polymorphic judgment scheme of points-into relation *)
   type ('a,'b) ptr = unit -> ('a,'b) _ptr
 
+  let pz () = Pz
+  let ps p () = Ps (p ())
+
+  module Vals = struct
+    let n0 () = Pz
+    let n1 () = Ps Pz
+    let n2 () = Ps (Ps Pz)
+    let n3 () = Ps (Ps (Ps Pz))
+    let n4 () = Ps (Ps (Ps (Ps Pz)))
+    let n5 () = Ps (Ps (Ps (Ps (Ps Pz))))
+  end
+  (* Submultiset relation  *)
   type (_,'a) _mptr =
     | Mz: (unit, 'a) _mptr
     | Ms: (('c, 'b) _ptr * ('a, 'b) _mptr) -> ('c * 'a, 'b) _mptr
 
+  (* For encoding polymorphic judgment scheme of points-into relation *)
   type ('a,'b) mptr = unit -> ('a,'b) _mptr
 
   let mz () = Mz
   let ms p ps () = Ms (p (), ps ())
-  let n0 () = Pz
-  let n1 () = Ps Pz
-  let n2 () = Ps (Ps Pz)
-  let n3 () = Ps (Ps (Ps Pz))
-  let n4 () = Ps (Ps (Ps (Ps Pz)))
-  let n5 () = Ps (Ps (Ps (Ps (Ps Pz))))
 
-  let testm: ('a * ('b * unit), 'b * ('c * ('a * 'd))) mptr = fun () -> (ms n2 @@ ms n0 @@ mz) ()
+  (* Type-safe (multi)projection on hlists *)
+  module Proj(H:hlist) = struct
+    let rec proj: type a ctx. (a,ctx) _ptr -> ctx H.hlist -> a H.el =
+      fun n hlist -> match n, hlist with
+                     | Pz, H.S (hd, _) -> hd
+                     | Ps n, H.S (_, tl) -> proj n tl
 
-  let testm2: ('a * ('b * unit), 'b * ('c * ('a * unit))) mptr = testm
-
-  let rec proj: type a ctx. (a,ctx) _ptr -> ctx HL.hlist -> a HL.el =
-    fun n hlist -> match n, hlist with
-                   | Pz, HL.S (hd, _) -> hd
-                   | Ps n, HL.S (_, tl) -> proj n tl
-
-  let rec mproj: type xs ctx. (xs, ctx) _mptr -> ctx HL.hlist -> xs HL.hlist =
-    fun mptr hlist -> match mptr with
-                      | Mz -> HL.nil
-                      | Ms (i,ps) -> HL.cons (proj i hlist) (mproj ps hlist)
+    let rec mproj: type xs ctx. (xs, ctx) _mptr -> ctx H.hlist -> xs H.hlist =
+      fun mptr hlist -> match mptr with
+                        | Mz -> H.nil
+                        | Ms (i,ps) -> H.cons (proj i hlist) (mproj ps hlist)
+  end
 end
 
 
