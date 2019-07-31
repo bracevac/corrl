@@ -5,122 +5,6 @@ open Symantics
 open Dsl
 open Restriction
 open Hlists
-open Stat
-
-
-(* TODO factor out these common parts into a module *)
-module type BenchSym = sig
-  include JoinExtSym
-  val lift: 'a elem repr list -> 'a shape repr
-end
-
-module type BenchSymantics = (BenchSym with type 'a repr = 'a and type 'a elem = 'a evt and type 'a shape = 'a evt r)
-
-module CB = struct
-  include Cartesius
-end
-
-module Stat = struct
-  type stat =
-  {  name: string;
-     count: int;
-     n_tested: int;     (* measure by pattern cont.  *)
-     n_output: int;     (* that too, or by context  *)
-     (* mutable t_react: float;    (\* override singleworld *\)
-      * mutable t_latency: float;  (\* override context *\) *)
-     throughput: float; (* derivable by count/duration in the end *)
-     memory: float;     (* measure in eat *)
-     duration: float }  (* measure at start/end *)
-
-  let freshStat key cnt =
-    ref { name = key;
-          count = cnt;
-          n_tested = 0;
-          n_output = 0;
-          (* t_react = 0.0;
-           * t_latency = 0.0; *)
-          throughput = 0.0;
-          memory = 0.0;
-          duration = 0.0 }
-
-  let csv_header = "name,count,n_tested,n_output,throughput,memory,duration"
-  let to_csv_row stat =
-    Printf.sprintf "\"%s\",\"%d\",\"%d\",\"%d\",\"%f\",\"%f\",\"%f\""
-      stat.name
-      stat.count
-      stat.n_tested
-      stat.n_output
-      (* stat.t_react
-       * stat.t_latency *)
-      stat.throughput
-      stat.memory
-      stat.duration
-end
-
-
-let rand_stream n =
-  let res = ref (Async.liftPromise RNil) in
-  let rec loop i =
-    if (i > 0) then begin
-      res := (Async.liftPromise (RCons (Ev (Random.int 1073741823, (i,i)), !res)));
-      loop (i - 1)
-    end
-    else ()
-  in begin
-    loop n;
-    !res
-  end
-
-let randArray n =
-  Array.init n (fun i -> (Ev (Random.int 1073741823, (i,i))))
-
-
-let repetitions = 10
-let samples  = 10
-let now = Unix.gettimeofday
-(* Number of events in a generated stream *)
-let event_count = 1000
-
-
-(* Here is a manual expansion of what we generate *)
-(* let ccons s c = CB.(from s @. (c ()))
- * let ctx0 () = CB.cnil
- * let ctx1 () = ccons (rand_stream event_count) ctx0
- * let ext1_0 () = CB.empty_ext
- * let ext1_1 () = most_recently Here
- * let ext1_2 () = affinely 1 Here
- * (\* let ext1_3 () = affinely 1 Here  TODO: integration of aligning *\)
- * let pat1: ((int * Prelude.Interval.time) * unit) -> (int * unit, int) CB.pat =
- *   fun ((x1,_), ()) -> CB.(yield x1)
- * let join1_0 () = CB.join (ctx1 ()) (ext1_0 ()) pat1
- * let join1_1 () = CB.join (ctx1 ()) (ext1_1 ()) pat1
- * let join1_2 () = CB.join (ctx1 ()) (ext1_2 ()) pat1
- *
- * let ctx2 () = ccons (rand_stream event_count) ctx1
- * let ext2_0 () = CB.empty_ext
- * let ext2_1 () = CB.((most_recently Here) |++| (most_recently (Next Here)))
- * let ext2_2 () = CB.((affinely 1 Here) |++| (affinely 1 (Next Here)))
- * (\* let ext1_3 () = affinely 1 Here  TODO: integration of aligning *\)
- * let pat2: ((int * Prelude.Interval.time) *
- *              ((int * Prelude.Interval.time) *
- *                 unit)) -> (int * (int * unit), (int * int)) CB.pat =
- *   fun ((x1,_), ((x2,_), ())) -> CB.(yield (pair x1 x2))
- * let join2_0 () = CB.join (ctx2 ()) (ext2_0 ()) pat2
- * let join2_1 () = CB.join (ctx2 ()) (ext2_1 ()) pat2
- * let join2_2 () = CB.join (ctx2 ()) (ext2_2 ()) pat2
- *
- * let ctx3 () = ccons (rand_stream event_count) ctx2
- * let ext3_0 () = CB.empty_ext
- * let ext3_1 () = CB.((most_recently Here) |++| (most_recently (Next Here)) |++| (most_recently (Next (Next Here))))
- * let ext3_2 () = CB.((affinely 1 Here) |++| (affinely 1 (Next Here)) |++| (affinely 1 (Next (Next Here))))
- * (\* let ext1_3 () = affinely 1 Here  TODO: integration of aligning *\)
- * let pat3: ((int * Prelude.Interval.time) *
- *              ((int * Prelude.Interval.time) *
- *                 ((int * Prelude.Interval.time) * unit))) -> (int * (int * (int * unit)), (int * (int * int))) CB.pat =
- *             fun ((x1,_), ((x2,_), ((x3,_), ()))) -> CB.(yield (pair x1 (pair x2 x3)))
- * let join3_0 () = CB.join (ctx3 ()) (ext3_0 ()) pat3
- * let join3_1 () = CB.join (ctx3 ()) (ext3_1 ()) pat3
- * let join3_2 () = CB.join (ctx3 ()) (ext3_2 ()) pat3 *)
 
 module Generator = struct
   type variant = int -> unit -> unit
@@ -152,6 +36,7 @@ module Generator = struct
     emitln "open Restriction";
     emitln "open Hlists";
     emitln "open HPointers";
+    emitln "open Bench_common";
     emitln "open Stat";
     emitln "";
     emitln "(* Global parameters *)";
@@ -218,7 +103,7 @@ module Generator = struct
     | effect Repetitions k -> continue k 10
 
   let filename = function
-    | i when i > 0 -> Printf.sprintf "Bench%d.ml" i
+    | i when i > 0 -> Printf.sprintf "bench%d.ml" i
 end
 
 module Extensions = struct
@@ -242,8 +127,6 @@ module Extensions = struct
         for i = 0 to (n - 1) do
           enclose (fun () -> emit name; emit " "; (f i)); (sep n i)
         done
-
-  (* (ms n0 @@ ms n1 @@ ms n2 mz) *)
 
   let mptrs n () =
     range "ms" extat (fun i -> enclose ~left:"(fun () -> " (fun () -> ptr i)) n ()

@@ -24,4 +24,4 @@ let () =
 #mod_use "symantics.ml";;
 #mod_use "dsl.ml";;
 #mod_use "restriction.ml";;
-#mod_use "stat.ml";;
+#mod_use "bench_common.ml";;
