@@ -123,7 +123,7 @@ let event_count = 1000
  * let join3_2 () = CB.join (ctx3 ()) (ext3_2 ()) pat3 *)
 
 module Generator = struct
-  type variant = int -> string
+  type variant = int -> unit -> unit
 
   (* Parameters *)
   effect EventCount: int (* Size of streams *)
@@ -164,7 +164,7 @@ module Generator = struct
 
   let rand_stream = "(rand_stream event_count)"
   let ctx i = emit (Printf.sprintf "let ctx%d () = ccons %s ctx%d\n" i rand_stream (i-1))
-  let ext i j v = emit (Printf.sprintf "let ext%d_%d () = %s\n" i j v)
+  let ext i j v = emit (Printf.sprintf "let ext%d_%d () = " i j); v (); emitln ""
   let rec pat_dom = function
     | 0 -> emit "unit"
     | j when j > 0 -> emit "((int * Prelude.Interval.time) * "; (pat_dom (j - 1)); emit ")"
@@ -195,14 +195,14 @@ module Generator = struct
   let gen: int -> variant list -> Buffer.t = fun n variants ->
     let format = Printf.sprintf in
     let _ = if n < 1 then failwith "Need arity >= 1" in
-    let variants = (fun _ -> "CB.empty_ext") :: variants in
+    let variants = (fun _ _ -> emit "CB.empty_ext") :: variants in
     let buffer = Buffer.create (16384 + 1024 * (List.length variants)) in
     let mk () =
       preamble (); emitln "(* Test instances *)";
       for i = 1 to n do
         emitln (format "(* Arity %d *)" i);
         (ctx i);
-        List.iteri (fun j v -> ext i j (v j)) variants;
+        List.iteri (fun j v -> ext i j (v i)) variants;
         pat i;
         List.iteri (fun j _ -> join i j) variants;
         emit "\n\n"
@@ -214,11 +214,42 @@ module Generator = struct
     | effect EventCount k -> continue k 1000 (*TODO move default params into a central location *)
     | effect Samples k -> continue k 10
     | effect Repetitions k -> continue k 10
+
+  let filename = function
+    | i when i > 0 -> Printf.sprintf "Bench%d.ml" i
 end
 
-let test_generator ?(n=3) () =
-  print_string (Buffer.contents (Generator.gen n []))
+module Extensions = struct
+  open Generator
 
+  let rec ptr = function
+    | 0 -> emit "Here"
+    | i when i > 0 -> emit "(Next "; (ptr (i - 1)); emit ")"
+
+  let separator n i =
+    if (i + 1) = n then ()
+    else emit " |++| "
+
+  let range name n () =
+    emit "CB.(";
+    for i = 0 to (n - 1) do
+      emit "("; emit name; emit " "; (ptr i); emit ")"; (separator n i)
+    done;
+    emit ")"
+
+  let most_recently = range "most_recently"
+  let affinely = range "affinely 1"
+
+  let list = [most_recently; affinely]
+end
+
+let test_generator ?(n=3) ?(xts=Extensions.list) () =
+  print_string (Buffer.contents (Generator.gen n xts))
+
+let write_file ?(n=3) ?(xts=Extensions.list) ?(fname=Generator.filename) () =
+  let oc = open_out (fname n) in
+  Buffer.output_buffer oc (Generator.gen n xts);
+  close_out oc
 
 (* module Join3Bench: (JOIN with type joined = int evt * int evt * int evt
  *                           and type input = int evt r * int evt r * int evt r
