@@ -26,6 +26,22 @@ module Generator = struct
   let emitln: string -> unit = fun s -> perform (Emit s); perform (Emit "\n")
 
 
+  let separator sep stop n i =
+    if (i + 1) = n then emit stop
+    else emit sep
+
+  let extplus = separator " |++| " ""
+  let extat = separator " @@ " " mz"
+  let ctxat = separator " @. " " @. cnil"
+
+  let enclose ?(left="(") ?(right=")") f = emit left; f(); emit right
+  let enclose' ?(left="(") ?(right=")") s = emit left; emit s; emit right
+
+  let range name sep f n () =
+        for i = 0 to (n - 1) do
+          enclose (fun () -> emit name; emit " "; (f i)); (sep n i)
+        done
+
   let preamble () =
     let format = Printf.sprintf in
     emitln "open Prelude";
@@ -45,12 +61,14 @@ module Generator = struct
     emitln "let now = Unix.gettimeofday";
     (* Number of events in a generated stream *)
     emitln (format "let event_count = %d" (eventCount ()));
-    emitln "let ccons s c = CB.(from s @. (c ()))";
-    emitln "let ctx0 () = CB.cnil";
+    (* emitln "let ccons s c = CB.(from s @. (c ()))";
+     * emitln "let ctx0 () = CB.cnil"; *)
     emitln ""
 
-  let rand_stream = "(rand_stream event_count)"
-  let ctx i = emit (Printf.sprintf "let ctx%d () = ccons %s ctx%d\n" i rand_stream (i-1))
+  let rand_stream = "from (rand_stream event_count)"
+  let ctx' i = emit "CB."; enclose (fun () -> (range rand_stream ctxat (fun _ -> ()) i ()))
+  let ctx i = emit (Printf.sprintf "let ctx%d () = " i); ctx' i; emit "\n"
+
   let ext i j v = emit (Printf.sprintf "let ext%d_%d () = " i j); v (); emitln ""
   let rec pat_dom = function
     | 0 -> emit "unit"
@@ -77,33 +95,62 @@ module Generator = struct
     emit "  fun "; (pat_args i); emit " -> CB.(yield "; (pat_body i); emit ")\n"
   let join i j = emit (Printf.sprintf "let join%d_%d () = CB.join (ctx%d ()) (ext%d_%d ()) pat%d\n" i j i i j i)
 
-  (* gen n vs generates benchmark code for all arities 1..n, where vs contains sub-generators
-     of test instances, parametric over the current arity.  *)
-  let gen: int -> variant list -> Buffer.t = fun n variants ->
+  let one_code: int -> variant list -> unit -> unit = fun i variants () ->
     let format = Printf.sprintf in
-    let _ = if n < 1 then failwith "Need arity >= 1" in
+    let _ = if i < 1 then failwith "Need arity >= 1" in
     let variants = (fun _ _ -> emit "CB.empty_ext") :: variants in
-    let buffer = Buffer.create (16384 + 1024 * (List.length variants)) in
-    let mk () =
-      preamble (); emitln "(* Test instances *)";
-      for i = 1 to n do
-        emitln (format "(* Arity %d *)" i);
-        (ctx i);
-        List.iteri (fun j v -> ext i j (v i)) variants;
-        pat i;
-        List.iteri (fun j _ -> join i j) variants;
-        emit "\n\n"
-      done
-    in
-    match mk () with (* string are appended to an ambient buffer value via Emit  *)
-    | () -> buffer
-    | effect (Emit s) k -> Buffer.add_string buffer s; continue k ()
-    | effect EventCount k -> continue k 1000 (*TODO move default params into a central location *)
+    emitln (format "(* Arity %d *)" i);
+    (ctx i);
+    List.iteri (fun j v -> ext i j (v i)) variants;
+    pat i;
+    List.iteri (fun j _ -> join i j) variants
+
+  let all_codes: int -> variant list -> unit -> unit = fun n variants () ->
+    for i = 1 to n do
+      one_code i variants ();
+      emit "\n\n"
+    done
+
+  let add_preamble action =
+    preamble (); emitln "(* Test instances *)"; action ()
+
+  let inject_stats action =
+    try action () with
+    | effect EventCount k -> continue k 1000
     | effect Samples k -> continue k 10
     | effect Repetitions k -> continue k 10
 
   let filename = function
     | i when i > 0 -> Printf.sprintf "bench%d.ml" i
+
+  let to_file name action =
+    let oc = open_out name in
+    match action () with
+    | x -> close_out oc; x
+    | effect (Emit s) k -> continue k (output_string oc s)
+
+  let to_buffer action =
+    let buffer = Buffer.create 16384 in
+    match action () with
+    | x -> buffer
+    | effect (Emit s) k -> continue k (Buffer.add_string buffer s)
+
+  let gen_one: int -> variant list -> unit -> unit = fun n variants () ->
+    Handlers.(inject_stats |+| add_preamble) (one_code n variants)
+
+  let gen_all: int -> variant list -> unit -> unit = fun n variants () ->
+    Handlers.(inject_stats |+| add_preamble) (all_codes n variants)
+
+  let separate_files: int -> variant list -> unit = fun n variants ->
+    for i = 1 to n do
+      to_file (filename i) (gen_one i variants)
+    done
+
+  let single_file: int -> variant list -> unit = fun n variants ->
+    to_file (filename n) (gen_all n variants)
+
+  let in_buffer: int -> variant list -> Buffer.t = fun n variants ->
+    to_buffer (gen_all n variants)
 end
 
 module Extensions = struct
@@ -112,21 +159,6 @@ module Extensions = struct
   let rec ptr = function
     | 0 -> emit "pz"
     | i when i > 0 -> emit "(ps "; (ptr (i - 1)); emit ")"
-
-  let separator sep stop n i =
-    if (i + 1) = n then emit stop
-    else emit sep
-
-  let extplus = separator " |++| " ""
-  let extat = separator " @@ " " mz "
-
-  let enclose ?(left="(") ?(right=")") f = emit left; f(); emit right
-  let enclose' ?(left="(") ?(right=")") s = emit left; emit s; emit right
-
-  let range name sep f n () =
-        for i = 0 to (n - 1) do
-          enclose (fun () -> emit name; emit " "; (f i)); (sep n i)
-        done
 
   let mptrs n () =
     range "ms" extat ptr n ()
@@ -141,13 +173,12 @@ module Extensions = struct
   let list = [most_recently; affinely; aligning]
 end
 
-let test_generator ?(n=3) ?(xts=Extensions.list) () =
-  print_string (Buffer.contents (Generator.gen n xts))
+let print_code ?(n=3) ?(xts=Extensions.list) () =
+  print_string (Buffer.contents (Generator.in_buffer n xts))
 
-let write_file ?(n=3) ?(xts=Extensions.list) ?(fname=Generator.filename) () =
-  let oc = open_out (fname n) in
-  Buffer.output_buffer oc (Generator.gen n xts);
-  close_out oc
+let write_code ?(n=3) ?(xts=Extensions.list) () =
+  Generator.separate_files n xts
+
 
 (* module Join3Bench: (JOIN with type joined = int evt * int evt * int evt
  *                           and type input = int evt r * int evt r * int evt r
