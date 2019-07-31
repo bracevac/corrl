@@ -75,7 +75,7 @@ module Generator = struct
     emit (Printf.sprintf "let pat%d: " i);
     (pat_dom i); emit " -> "; (pat_cod i); emit " =\n";
     emit "  fun "; (pat_args i); emit " -> CB.(yield "; (pat_body i); emit ")\n"
-  let join i j = emit (Printf.sprintf "let join%d_%d () = CB.join (ctx%d ()) (ext%d_%d ()) pat%d" i j i i j i)
+  let join i j = emit (Printf.sprintf "let join%d_%d () = CB.join (ctx%d ()) (ext%d_%d ()) pat%d\n" i j i i j i)
 
   (* gen n vs generates benchmark code for all arities 1..n, where vs contains sub-generators
      of test instances, parametric over the current arity.  *)
@@ -110,8 +110,8 @@ module Extensions = struct
   open Generator
 
   let rec ptr = function
-    | 0 -> emit "Here"
-    | i when i > 0 -> emit "(Next "; (ptr (i - 1)); emit ")"
+    | 0 -> emit "pz"
+    | i when i > 0 -> emit "(ps "; (ptr (i - 1)); emit ")"
 
   let separator sep stop n i =
     if (i + 1) = n then emit stop
@@ -129,7 +129,7 @@ module Extensions = struct
         done
 
   let mptrs n () =
-    range "ms" extat (fun i -> enclose ~left:"(fun () -> " (fun () -> ptr i)) n ()
+    range "ms" extat ptr n ()
 
   let most_recently n () = emit "CB."; enclose (fun () -> range "most_recently" extplus ptr n ())
   let affinely n () = emit "CB."; enclose (fun () -> range "affinely 1" extplus ptr n ())
