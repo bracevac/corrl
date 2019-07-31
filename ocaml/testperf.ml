@@ -141,6 +141,7 @@ module Generator = struct
   let emits: string list -> unit = fun ss -> List.iter emit ss
   let emitln: string -> unit = fun s -> perform (Emit s); perform (Emit "\n")
 
+
   let preamble () =
     let format = Printf.sprintf in
     emitln "open Prelude";
@@ -150,6 +151,7 @@ module Generator = struct
     emitln "open Dsl";
     emitln "open Restriction";
     emitln "open Hlists";
+    emitln "open HPointers";
     emitln "open Stat";
     emitln "";
     emitln "(* Global parameters *)";
@@ -226,21 +228,34 @@ module Extensions = struct
     | 0 -> emit "Here"
     | i when i > 0 -> emit "(Next "; (ptr (i - 1)); emit ")"
 
-  let separator n i =
-    if (i + 1) = n then ()
-    else emit " |++| "
+  let separator sep stop n i =
+    if (i + 1) = n then emit stop
+    else emit sep
 
-  let range name n () =
-    emit "CB.(";
-    for i = 0 to (n - 1) do
-      emit "("; emit name; emit " "; (ptr i); emit ")"; (separator n i)
-    done;
-    emit ")"
+  let extplus = separator " |++| " ""
+  let extat = separator " @@ " " mz "
 
-  let most_recently = range "most_recently"
-  let affinely = range "affinely 1"
+  let enclose ?(left="(") ?(right=")") f = emit left; f(); emit right
+  let enclose' ?(left="(") ?(right=")") s = emit left; emit s; emit right
 
-  let list = [most_recently; affinely]
+  let range name sep f n () =
+        for i = 0 to (n - 1) do
+          enclose (fun () -> emit name; emit " "; (f i)); (sep n i)
+        done
+
+  (* (ms n0 @@ ms n1 @@ ms n2 mz) *)
+
+  let mptrs n () =
+    range "ms" extat (fun i -> enclose ~left:"(fun () -> " (fun () -> ptr i)) n ()
+
+  let most_recently n () = emit "CB."; enclose (fun () -> range "most_recently" extplus ptr n ())
+  let affinely n () = emit "CB."; enclose (fun () -> range "affinely 1" extplus ptr n ())
+  let aligning n () =
+    emit "CB."; enclose (fun () ->
+                    enclose (fun () -> emit "aligning "; enclose (fun () -> mptrs n ()));
+                    emit " |++| "; (range "most_recently" extplus ptr n ()))
+
+  let list = [most_recently; affinely; aligning]
 end
 
 let test_generator ?(n=3) ?(xts=Extensions.list) () =
