@@ -5,10 +5,10 @@ open Symantics
 open Dsl
 open Restriction
 open Hlists
+open Stat
 
 
-
-
+(* TODO factor out these common parts into a module *)
 module type BenchSym = sig
   include JoinExtSym
   val lift: 'a elem repr list -> 'a shape repr
@@ -20,14 +20,8 @@ module CB = struct
   include Cartesius
 end
 
-
-(* Stream size *)
-let repetitions = 10
-let samples  = 10
-let bound = 1073741823 (* 2^30 - 1, max bound that Random.int accepts *)
-let now = Unix.gettimeofday
-
-type stat =
+module Stat = struct
+  type stat =
   {  name: string;
      count: int;
      n_tested: int;     (* measure by pattern cont.  *)
@@ -38,44 +32,37 @@ type stat =
      memory: float;     (* measure in eat *)
      duration: float }  (* measure at start/end *)
 
-let csv_header = "name,count,n_tested,n_output,throughput,memory,duration"
-let to_csv_row stat =
-  Printf.sprintf "\"%s\",\"%d\",\"%d\",\"%d\",\"%f\",\"%f\",\"%f\""
-    stat.name
-    stat.count
-    stat.n_tested
-    stat.n_output
-    (* stat.t_react
-     * stat.t_latency *)
-    stat.throughput
-    stat.memory
-    stat.duration
+  let freshStat key cnt =
+    ref { name = key;
+          count = cnt;
+          n_tested = 0;
+          n_output = 0;
+          (* t_react = 0.0;
+           * t_latency = 0.0; *)
+          throughput = 0.0;
+          memory = 0.0;
+          duration = 0.0 }
 
-let freshStat key cnt =
-  ref { name = key;
-        count = cnt;
-        n_tested = 0;
-        n_output = 0;
-        (* t_react = 0.0;
-         * t_latency = 0.0; *)
-        throughput = 0.0;
-        memory = 0.0;
-        duration = 0.0 }
-
-(* effect Inject: (stat ref * (int Evt.evt array * int Evt.evt array * int Evt.evt array))
- * let inject () = perform Inject *)
-
-(* Signals end of a measurement *)
-(* effect Terminate: 'a
- * let terminate () = perform Terminate *)
-
+  let csv_header = "name,count,n_tested,n_output,throughput,memory,duration"
+  let to_csv_row stat =
+    Printf.sprintf "\"%s\",\"%d\",\"%d\",\"%d\",\"%f\",\"%f\",\"%f\""
+      stat.name
+      stat.count
+      stat.n_tested
+      stat.n_output
+      (* stat.t_react
+       * stat.t_latency *)
+      stat.throughput
+      stat.memory
+      stat.duration
+end
 
 
 let rand_stream n =
   let res = ref (Async.liftPromise RNil) in
   let rec loop i =
     if (i > 0) then begin
-      res := (Async.liftPromise (RCons (Ev (Random.int bound, (i,i)), !res)));
+      res := (Async.liftPromise (RCons (Ev (Random.int 1073741823, (i,i)), !res)));
       loop (i - 1)
     end
     else ()
@@ -85,8 +72,12 @@ let rand_stream n =
   end
 
 let randArray n =
-  Array.init n (fun i -> (Ev (Random.int bound, (i,i))))
+  Array.init n (fun i -> (Ev (Random.int 1073741823, (i,i))))
 
+
+let repetitions = 10
+let samples  = 10
+let now = Unix.gettimeofday
 (* Number of events in a generated stream *)
 let event_count = 1000
 
@@ -134,8 +125,42 @@ let event_count = 1000
 module Generator = struct
   type variant = int -> string
 
+  (* Parameters *)
+  effect EventCount: int (* Size of streams *)
+  let eventCount () = perform EventCount
+
+  effect Repetitions: int
+  let repetitions () = perform Repetitions
+
+  effect Samples: int
+  let samples () = perform Samples
+
+  (* Emit code in string form somewhere *)
   effect Emit: string -> unit
-  let emit s = perform (Emit s)
+  let emit: string -> unit = fun s -> perform (Emit s)
+  let emits: string list -> unit = fun ss -> List.iter emit ss
+  let emitln: string -> unit = fun s -> perform (Emit s); perform (Emit "\n")
+
+  let preamble () =
+    let format = Printf.sprintf in
+    emitln "open Prelude";
+    emitln "open Slot";
+    emitln "open Core";
+    emitln "open Symantics";
+    emitln "open Dsl";
+    emitln "open Restriction";
+    emitln "open Hlists";
+    emitln "open Stat";
+    emitln "";
+    emitln "(* Global parameters *)";
+    emitln (format "let repetitions = %d" (repetitions ()));
+    emitln (format "let samples = %d" (samples ()));
+    emitln "let now = Unix.gettimeofday";
+    (* Number of events in a generated stream *)
+    emitln (format "let event_count = %d" (eventCount ()));
+    emitln "let ccons s c = CB.(from s @. (c ()))";
+    emitln "let ctx0 () = CB.cnil";
+    emitln ""
 
   let rand_stream = "(rand_stream event_count)"
   let ctx i = emit (Printf.sprintf "let ctx%d () = ccons %s ctx%d\n" i rand_stream (i-1))
@@ -165,24 +190,34 @@ module Generator = struct
     emit "  fun "; (pat_args i); emit " -> CB.(yield "; (pat_body i); emit ")\n"
   let join i j = emit (Printf.sprintf "let join%d_%d () = CB.join (ctx%d ()) (ext%d_%d ()) pat%d" i j i i j i)
 
-
+  (* gen n vs generates benchmark code for all arities 1..n, where vs contains sub-generators
+     of test instances, parametric over the current arity.  *)
   let gen: int -> variant list -> Buffer.t = fun n variants ->
+    let format = Printf.sprintf in
     let _ = if n < 1 then failwith "Need arity >= 1" in
     let variants = (fun _ -> "CB.empty_ext") :: variants in
     let buffer = Buffer.create (16384 + 1024 * (List.length variants)) in
     let mk () =
+      preamble (); emitln "(* Test instances *)";
       for i = 1 to n do
+        emitln (format "(* Arity %d *)" i);
         (ctx i);
         List.iteri (fun j v -> ext i j (v j)) variants;
         pat i;
         List.iteri (fun j _ -> join i j) variants;
-        emit "\n"
+        emit "\n\n"
       done
     in
-    match mk () with
+    match mk () with (* string are appended to an ambient buffer value via Emit  *)
     | () -> buffer
     | effect (Emit s) k -> Buffer.add_string buffer s; continue k ()
+    | effect EventCount k -> continue k 1000 (*TODO move default params into a central location *)
+    | effect Samples k -> continue k 10
+    | effect Repetitions k -> continue k 10
 end
+
+let test_generator ?(n=3) () =
+  print_string (Buffer.contents (Generator.gen n []))
 
 
 (* module Join3Bench: (JOIN with type joined = int evt * int evt * int evt

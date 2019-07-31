@@ -11,7 +11,10 @@ module Mailboxes = struct
     match h with
     | Z -> f Events.nil
     | S (ls,h) ->
-       List.concat @@ List.map (fun (x,_) -> cart h (fun xs -> f Events.(cons x xs))) ls
+       List.concat @@ List.map (fun (x,c) ->
+                          match !c with
+                          | Fin i when i <= 0 -> []
+                          | _ -> cart h (fun xs -> f Events.(cons x xs))) ls
     (* TODO: consumer must take care of lives counter somehow *)
 end
 
