@@ -25,6 +25,9 @@ let mk_slot: type a. unit -> a slot = fun () ->
      let setMail v = perform (SetMail v)
    end: (SLOT with type t = a))
 
+let abstract: type a. a slot -> slot_ex =
+  fun slot -> Obj.magic slot
+
 (* Create a slot instance from a value witnessing the type. *)
 let mkSlot: type t. t -> t slot = fun _ -> mk_slot ()
 

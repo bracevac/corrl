@@ -47,13 +47,13 @@ module Cartesius = struct
     Handlers.((h ctx susp) |+| (h' ctx susp))
 
   (* turns yielded event tuples from hlist form into the naked tuple and meta data context, to be passed into the join pattern. *)
-  let rec decompose: type s a. (s,a) ctx -> s Events.hlist -> a * s MCtx.hlist = fun ctx tuple ->
+  let rec decompose: type s a. (s,a) ctx -> s Events.hlist -> a * s Counts.hlist * s MCtx.hlist = fun ctx tuple ->
     let open Evt in
     match ctx, tuple with
-    | (Z, Ctx.Z), Events.Z -> ((), MCtx.nil)
-    | (S n, Ctx.S (_,xs)), Events.S (Ev (e,t),es) ->
-       let (next,meta) = decompose (n,xs) es in
-       (((e,t), next), MCtx.cons t meta)
+    | (Z, Ctx.Z), Events.Z -> ((), Counts.nil, MCtx.nil)
+    | (S n, Ctx.S (_,xs)), Events.S ((Ev (e,t), count), es) ->
+       let (next,cs,meta) = decompose (n,xs) es in
+       (((e,t), next), Counts.(cons count cs), MCtx.cons t meta)
 
   (* TODO: let the shape representation be thunks of reactives instead of reactives. *)
   let join: type s a b. (s, a) ctx -> s ext -> (a -> (s,b) pat) -> b shape repr = fun ctx ext body ->
@@ -61,6 +61,7 @@ module Cartesius = struct
     let (_,ctx) = ctx in
     let module M = HMAP(Ctx)(Slots) in
     let module MCR = HMAP(Ctx)(Reacts) in
+    let module FC = HFOREACH(Counts) in
     let slots = M.map {M.f = fun _ -> mk_slot ()} ctx in
     let suspensions = mk_suspensions slots in
     let yf: b yieldfail = mk_yieldfail () in
@@ -68,9 +69,9 @@ module Cartesius = struct
     let join_handler = join_shape slots (ext slots suspensions) (fun tuple ->
                            try
                              begin
-                               let (vars,metas) = decompose tuple in
+                               let (vars,counts,metas) = decompose tuple in
                                let (payload,time) = (body vars metas yf) in
-                               (*TODO decrease life time here*)
+                               FC.(foreach { f = fun c -> c := Count.dec !c}) counts;
                                yield_mod yf (Evt.evt payload time)
                              end
                            with

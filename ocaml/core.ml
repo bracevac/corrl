@@ -4,7 +4,8 @@ open Slot
 open Yieldfail
 
 module Reacts = HList(struct type 'a t = 'a evt r end)
-module Events = HList(struct type 'a t = 'a evt end)
+module Events = HList(struct type 'a t = 'a evt * (Count.t ref) end)
+module Counts = HList(struct type 'a t = Count.t ref end)
 module Mailboxes = struct
   include HList(struct type 'a t = 'a mailbox end)
   let rec cart : type w r. r hlist -> (r Events.hlist -> w list) -> w list = fun h f ->
@@ -14,8 +15,7 @@ module Mailboxes = struct
        List.concat @@ List.map (fun (x,c) ->
                           match !c with
                           | Fin i when i <= 0 -> []
-                          | _ -> cart h (fun xs -> f Events.(cons x xs))) ls
-    (* TODO: consumer must take care of lives counter somehow *)
+                          | _ -> cart h (fun xs -> f Events.(cons (x,c) xs))) ls
 end
 
 (* TODO: these can be further abstracted to work with different codomain and force into different hlist type *)
@@ -56,14 +56,23 @@ let mk_suspensions: type a. a Slots.hlist -> a Suspensions.hlist = fun slots ->
   let module M = HMAP(Slots)(Suspensions) in
   M.map {M.f = fun _ -> Suspension.mk ()} slots
 
+type 'a handler = (unit -> 'a) -> 'a
+
+let h_gen () =
+  let module SF = HFOLD(Slots) in
+  (fun slots mk ->
+  SF.(fold {zero = Handlers.id;
+            succ = fun slot handler ->
+                 (mk (abstract slot)) |+| (handler ())
+                     }) slots)
 
 (* Arity generic join implementation. *)
 
   (* Handles the ambient mailbox state for each slot. *)
   (* Projecting to a uniformly-typed list of abstract SLOT modules makes it easier to generate handlers of
      generative effects.  *)
-let memory slot_list =
-  Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
+let memory slots =
+  h_gen () slots (fun (s: (module SLOT)) ->
       let module S = (val s) in
       let mem: S.t mailbox ref = ref [] in
       (fun action ->
@@ -72,8 +81,8 @@ let memory slot_list =
         | effect (S.SetMail l) k -> mem := l; continue k ()))
 
   (* Default behavior: enqueue each observed event notification in the corresponding mailbox. *)
-let forAll slot_list =
-  Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
+let forAll slots =
+  h_gen () slots (fun (s: (module SLOT)) ->
       let module S = (val s) in
       (fun action ->
         try action () with
@@ -81,9 +90,18 @@ let forAll slot_list =
            S.(setMail (((x, (ref Count.Inf)) :: (getMail ()))));
            continue k (S.push x)))
 
+let gc slots =
+  let module SF = HFOREACH(Slots) in
+  SF.(foreach { f = fun slot ->
+                    let mbox = getMail_of slot () in
+                    let mbox = (List.filter (fun (_,c) -> Count.lt_i 0 !c) mbox) in
+                    setMail_of slot mbox
+  }) slots
+
+
   (* Implements the generic cartesian product.  *)
-let reify slot_list mboxes consumer =
-  Handlers.gen slot_list (fun _ (s: (module SLOT)) ->
+let reify slots mboxes consumer =
+  h_gen () slots (fun (s: (module SLOT)) ->
       let module S = (val s) in
       (fun action ->
         try action () with
@@ -95,18 +113,18 @@ let reify slot_list mboxes consumer =
              end
            in
            (* For simplicity, we supply a consumer function for the tuples. In the paper, we provisioned a dedicated trigger effect for signaling each tuple. *)
-           List.iter consumer (Mailboxes.cart mail (fun x -> [x])); (* TODO make cart consider the life counters. *)
+           List.iter consumer (Mailboxes.cart mail (fun x -> [x]));
+           gc slots;
            continue k ()))
 
 let join_shape slots restriction consumer =
   let module SMBD = HMAP(Slots)(MailboxDrefs) in
   let module FS = HFOLD(Slots) in
   let mboxes = SMBD.(map {f = fun s -> (getMail_of s) }) slots in
-  let slot_list: slot_ex list = FS.(fold {zero = []; succ = fun s next -> (Obj.magic s) :: (next ()) }) slots in
-  (memory slot_list)
-  |+| (reify slot_list mboxes consumer)
+  (memory slots)
+  |+| (reify slots mboxes consumer)
   |+| restriction
-  |+| (forAll slot_list)
+  |+| (forAll slots)
 
 (* Generates the interleaved push iterations over n reactives *)
 let interleaved_bind: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> unit -> unit =

@@ -1,3 +1,5 @@
+(* identity handler *)
+let id action = action ()
 (* binary handler composition *)
 let (|+|) h1 h2 action = h1 (fun () -> h2 action)
 (* compose given list of handlers to a single handler.  *)
