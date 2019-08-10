@@ -91,7 +91,7 @@ module Generator = struct
     emit "  fun "; (pat_args i); emit " -> CB.(yield "; (pat_body i); emit ")\n"
   let join i j =
     emit (Printf.sprintf "let join%d_%d () = CB.join (ctx%d ()) (ext%d_%d ()) pat%d\n" i j i i j i)
-  let add_instance n i {name = s; code = _} = emit (Printf.sprintf "let _ = Queue.add (\"%s%d\", join%d_%d) instances\n" s n n i)
+  let add_instance n i {name = s; code = _} = emit (Printf.sprintf "let _ = Queue.add (\"%s\", %d, join%d_%d) instances\n" s n n i)
 
   (* one_code n vs () generates the test instance code for one given arity n and list of variants vs.
      An instance has the form:
@@ -124,34 +124,18 @@ module Generator = struct
   let add_preamble () =
     preamble (); emitln "(* Test instances *)"
 
-  let add_warmup () =
-    emitln "let warmup () =";
-    indent (fun () ->
-        emitln "for i = 1 to warmup_rounds do";
-        indent (fun () ->
-            emitln "let x = Array.make warmup_size 1 in ()");
-        emitln "done" );
-    emitln ""
-
-  let add_run () =
-    emitln "let run () =";
-    indent (fun () ->
-        emitln "warmup ();";
-        emitln "Queue.iter (fun (name,join) -> ";
-        indent ~n:12 (fun () ->
-            emitln "Gc.full_major ();";
-            emitln "println name";
-            emitln "(* TODO *)");
-       emitln ") instances");
-    emitln ""
+  let add_run title () =
+    emit "let _ = measure \""; emit title; emitln "\" instances"
 
   let rec digits =
     function
     | i when i >= 0 && i <= 9 -> 1
     | i when i > 9 -> 1 + (digits (i / 10))
 
-  let filename n = function
-    | i when i > 0 && i <= n -> Printf.sprintf "perf%0*d.ml" (digits n) i
+  let title n = function
+    | i when i > 0 && i <= n -> Printf.sprintf "perf%0*d" (digits n) i
+
+  let filename n i = (title n i) ^ ".ml"
 
   let to_file name action =
     let oc = open_out name in
@@ -165,22 +149,22 @@ module Generator = struct
     | x -> buffer
     | effect (Emit s) k -> continue k (Buffer.add_string buffer s)
 
-  let gen_one: int -> restriction list -> unit -> unit = fun n variants ->
-    add_preamble |>| (one_code n variants) |>| add_warmup |>| add_run
+  let gen_one: int -> restriction list -> string -> unit -> unit = fun n variants title ->
+    add_preamble |>| (one_code n variants)  |>| (add_run title)
 
-  let gen_all: int -> restriction list -> unit -> unit = fun n variants ->
-    add_preamble |>| (all_codes n variants) |>| add_warmup |>| add_run
+  let gen_all: int -> restriction list -> string -> unit -> unit = fun n variants title ->
+    add_preamble |>| (all_codes n variants) |>| (add_run title)
 
   let separate_files: int -> restriction list -> unit = fun n variants ->
     for i = 1 to n do
-      to_file (filename n i) (gen_one i variants)
+      to_file (filename n i) (gen_one i variants (title n i))
     done
 
   let single_file: int -> restriction list -> unit = fun n variants ->
-    to_file (filename n n) (gen_all n variants)
+    to_file (filename n n) (gen_all n variants (title n n))
 
   let in_buffer: int -> restriction list -> Buffer.t = fun n variants ->
-    to_buffer (gen_all n variants)
+    to_buffer (gen_all n variants (title n n))
 end
 
 module Extensions = struct
@@ -200,7 +184,7 @@ module Extensions = struct
                     enclose (fun () -> emit "aligning "; enclose (fun () -> mptrs n ()));
                     emit " |++| "; (range "most_recently" extplus ptr n ()))
 
-  let list = [{name = "cartesian"; code = (fun _ _ -> emit "CB.empty_ext") };
+  let list = [{name = "cartesian";     code = (fun _ _ -> emit "CB.empty_ext") };
               {name = "most_recently"; code = most_recently};
               {name = "affinely";      code = affinely};
               {name = "aligning";      code = aligning}]
