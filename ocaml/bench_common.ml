@@ -1,10 +1,6 @@
 open Prelude
-open Slot
-open Core
 open Symantics
 open Dsl2
-open Restriction
-open Hlists
 
 module type BenchSym = sig
   include JoinExtSym
@@ -16,8 +12,6 @@ module type BenchSymantics = (BenchSym with type 'a repr = 'a and type 'a elem =
 module CB = struct
   include Cartesius
 end
-
-
 
 let rand_stream n =
   let res = ref (Async.liftPromise RNil) in
@@ -40,3 +34,5 @@ let repetitions = 10
 let samples = 10
 let now = Unix.gettimeofday
 let event_count = 1000
+let warmup_size = 268435456
+let warmup_rounds = 10

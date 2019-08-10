@@ -6,25 +6,22 @@ open Dsl
 open Restriction
 open Hlists
 
+(* Retargetable benchmark code generator *)
 module Generator = struct
-  type variant = int -> unit -> unit
-
-  (* Parameters *)
-  effect EventCount: int (* Size of streams *)
-  let eventCount () = perform EventCount
-
-  effect Repetitions: int
-  let repetitions () = perform Repetitions
-
-  effect Samples: int
-  let samples () = perform Samples
+  (* Represents the code of a join instance (restriction handler to be
+     injected into a join).  Given the current arity to instantiate,
+     it will emit code of the declaration for the restriction handler
+     definition *)
+  type restriction = {
+      name: string;
+      code: int -> unit -> unit
+  }
 
   (* Emit code in string form somewhere *)
   effect Emit: string -> unit
   let emit: string -> unit = fun s -> perform (Emit s)
   let emits: string list -> unit = fun ss -> List.iter emit ss
   let emitln: string -> unit = fun s -> perform (Emit s); perform (Emit "\n")
-
 
   let separator sep stop n i =
     if (i + 1) = n then emit stop
@@ -37,13 +34,16 @@ module Generator = struct
   let enclose ?(left="(") ?(right=")") f = emit left; f(); emit right
   let enclose' ?(left="(") ?(right=")") s = emit left; emit s; emit right
 
+  let indent ?(n=2) action =
+    try action () with
+    | effect (Emit s) k -> emit (String.make n ' '); continue k (emit s)
+
   let range name sep f n () =
         for i = 0 to (n - 1) do
           enclose (fun () -> emit name; emit " "; (f i)); (sep n i)
         done
 
   let preamble () =
-    let format = Printf.sprintf in
     emitln "open Prelude";
     emitln "open Slot";
     emitln "open Core2";
@@ -54,13 +54,18 @@ module Generator = struct
     emitln "open HPointers";
     emitln "open Bench_common";
     emitln "open Stat";
+    emitln "";
+    emitln "let instances = Queue.create ()";
     emitln ""
 
   let rand_stream = "from (rand_stream event_count)"
   let ctx' i = emit "CB."; enclose (fun () -> (range rand_stream ctxat (fun _ -> ()) i ()))
   let ctx i = emit (Printf.sprintf "let ctx%d () = " i); ctx' i; emit "\n"
 
-  let ext i j v = emit (Printf.sprintf "let ext%d_%d () = " i j); v (); emitln ""
+  let ext i j {name = s; code = v} =
+    emit (Printf.sprintf "(* %s%d_%d *)\n" s i j);
+    emit (Printf.sprintf "let ext%d_%d () = " i j); v i (); emitln ""
+
   let rec pat_dom = function
     | 0 -> emit "unit"
     | j when j > 0 -> emit "((int * Prelude.Interval.time) * "; (pat_dom (j - 1)); emit ")"
@@ -84,35 +89,69 @@ module Generator = struct
     emit (Printf.sprintf "let pat%d: " i);
     (pat_dom i); emit " -> "; (pat_cod i); emit " =\n";
     emit "  fun "; (pat_args i); emit " -> CB.(yield "; (pat_body i); emit ")\n"
-  let join i j = emit (Printf.sprintf "let join%d_%d () = CB.join (ctx%d ()) (ext%d_%d ()) pat%d\n" i j i i j i)
+  let join i j =
+    emit (Printf.sprintf "let join%d_%d () = CB.join (ctx%d ()) (ext%d_%d ()) pat%d\n" i j i i j i)
+  let add_instance n i {name = s; code = _} = emit (Printf.sprintf "let _ = Queue.add (\"%s%d\", join%d_%d) instances\n" s n n i)
 
-  let one_code: int -> variant list -> unit -> unit = fun i variants () ->
+  (* one_code n vs () generates the test instance code for one given arity n and list of variants vs.
+     An instance has the form:
+     let ctx{n} () = <bind n random streams>
+     (let ext{n}_{i} () = <variant i>)_{1 <= i <= k} where vs = variant_1 ... variant_k
+     let pat{n} = <n-ary join pattern abstration>
+     (let join{n}_{i} = join ctx{n} ext{n}_{i} pat{n})_{1 <= i <= k}
+   *)
+  let one_code: int -> restriction list -> unit -> unit = fun i variants () ->
     let format = Printf.sprintf in
     let _ = if i < 1 then failwith "Need arity >= 1" in
-    let variants = (fun _ _ -> emit "CB.empty_ext") :: variants in
     emitln (format "(* Arity %d *)" i);
     (ctx i);
-    List.iteri (fun j v -> ext i j (v i)) variants;
+    List.iteri (fun j v -> ext i j v) variants;
     pat i;
-    List.iteri (fun j _ -> join i j) variants
+    List.iteri (fun j v -> join i j) variants;
+    List.iteri (fun j v ->  add_instance i j v) variants
 
-  let all_codes: int -> variant list -> unit -> unit = fun n variants () ->
+  (* all_codes n vs () generates the test instances for all
+     arities from 1 to n (cf. one_code above).
+     *)
+  let all_codes: int -> restriction list -> unit -> unit = fun n variants () ->
     for i = 1 to n do
       one_code i variants ();
       emit "\n\n"
     done
 
-  let add_preamble action =
-    preamble (); emitln "(* Test instances *)"; action ()
+  let (|>|) a1 a2 = fun () -> a1 (); a2 ()
 
-  let inject_stats action =
-    try action () with
-    | effect EventCount k -> continue k 1000
-    | effect Samples k -> continue k 10
-    | effect Repetitions k -> continue k 10
+  let add_preamble () =
+    preamble (); emitln "(* Test instances *)"
 
-  let filename = function
-    | i when i > 0 -> Printf.sprintf "perf%d.ml" i
+  let add_warmup () =
+    emitln "let warmup () =";
+    indent (fun () ->
+        emitln "for i = 1 to warmup_rounds do";
+        indent (fun () ->
+            emitln "let x = Array.make warmup_size 1 in ()");
+        emitln "done" );
+    emitln ""
+
+  let add_run () =
+    emitln "let run () =";
+    indent (fun () ->
+        emitln "warmup ();";
+        emitln "Queue.iter (fun (name,join) -> ";
+        indent ~n:12 (fun () ->
+            emitln "Gc.full_major ();";
+            emitln "println name";
+            emitln "(* TODO *)");
+       emitln ") instances");
+    emitln ""
+
+  let rec digits =
+    function
+    | i when i >= 0 && i <= 9 -> 1
+    | i when i > 9 -> 1 + (digits (i / 10))
+
+  let filename n = function
+    | i when i > 0 && i <= n -> Printf.sprintf "perf%0*d.ml" (digits n) i
 
   let to_file name action =
     let oc = open_out name in
@@ -126,21 +165,21 @@ module Generator = struct
     | x -> buffer
     | effect (Emit s) k -> continue k (Buffer.add_string buffer s)
 
-  let gen_one: int -> variant list -> unit -> unit = fun n variants () ->
-    Handlers.(inject_stats |+| add_preamble) (one_code n variants)
+  let gen_one: int -> restriction list -> unit -> unit = fun n variants ->
+    add_preamble |>| (one_code n variants) |>| add_warmup |>| add_run
 
-  let gen_all: int -> variant list -> unit -> unit = fun n variants () ->
-    Handlers.(inject_stats |+| add_preamble) (all_codes n variants)
+  let gen_all: int -> restriction list -> unit -> unit = fun n variants ->
+    add_preamble |>| (all_codes n variants) |>| add_warmup |>| add_run
 
-  let separate_files: int -> variant list -> unit = fun n variants ->
+  let separate_files: int -> restriction list -> unit = fun n variants ->
     for i = 1 to n do
-      to_file (filename i) (gen_one i variants)
+      to_file (filename n i) (gen_one i variants)
     done
 
-  let single_file: int -> variant list -> unit = fun n variants ->
-    to_file (filename n) (gen_all n variants)
+  let single_file: int -> restriction list -> unit = fun n variants ->
+    to_file (filename n n) (gen_all n variants)
 
-  let in_buffer: int -> variant list -> Buffer.t = fun n variants ->
+  let in_buffer: int -> restriction list -> Buffer.t = fun n variants ->
     to_buffer (gen_all n variants)
 end
 
@@ -161,7 +200,10 @@ module Extensions = struct
                     enclose (fun () -> emit "aligning "; enclose (fun () -> mptrs n ()));
                     emit " |++| "; (range "most_recently" extplus ptr n ()))
 
-  let list = [most_recently; affinely; aligning]
+  let list = [{name = "cartesian"; code = (fun _ _ -> emit "CB.empty_ext") };
+              {name = "most_recently"; code = most_recently};
+              {name = "affinely";      code = affinely};
+              {name = "aligning";      code = aligning}]
 end
 
 let print_code ?(n=3) ?(xts=Extensions.list) () =
