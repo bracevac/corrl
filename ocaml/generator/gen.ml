@@ -1,10 +1,3 @@
-open Prelude
-open Slot
-open Core
-open Symantics
-open Dsl
-open Restriction
-open Hlists
 
 (* Retargetable benchmark code generator *)
 module Gen = struct
@@ -196,6 +189,19 @@ let print_code ?(n=3) ?(xts=Extensions.list) () =
 let write_code ?(n=3) ?(xts=Extensions.list) () =
   Gen.separate_files n xts
 
+let write_dune_file n =
+  let oc = open_out "dune.benchmark" in
+  let out = output_string oc in
+  out "(executables \n";
+    out "  (names ";
+    for i = 1 to n do
+      out (Printf.sprintf "%s " (Gen.title n i))
+    done;
+    out ")\n";
+  out "(libraries unix oml)";
+  out ")\n";
+  close_out oc
+
 let arity = ref None
 let set_arity n =
   arity := Some n
@@ -206,7 +212,8 @@ let _ =
   in Arg.parse speclist print_endline usage_msg;
      match !arity with
      | Some n when n > 0 ->
-        write_code ~n:n ()
+        write_code ~n:n ();
+        write_dune_file n
      | _ -> print_string (Arg.usage_string speclist usage_msg)
 
 

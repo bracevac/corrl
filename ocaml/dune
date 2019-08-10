@@ -2,8 +2,8 @@
   (dev
     (flags (:standard -thread -g -w -33 -warn-error -A)))
   (release
-    (flags (:standard -thread -O3))))
+    (flags (:standard -thread))))
 
-(executables
-  (names main generator)
+(executable
+  (name main)
   (libraries unix oml))
