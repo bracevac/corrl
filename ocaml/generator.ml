@@ -7,7 +7,7 @@ open Restriction
 open Hlists
 
 (* Retargetable benchmark code generator *)
-module Generator = struct
+module Gen = struct
   (* Represents the code of a join instance (restriction handler to be
      injected into a join).  Given the current arity to instantiate,
      it will emit code of the declaration for the restriction handler
@@ -168,7 +168,7 @@ module Generator = struct
 end
 
 module Extensions = struct
-  open Generator
+  open Gen
 
   let rec ptr = function
     | 0 -> emit "pz"
@@ -191,10 +191,23 @@ module Extensions = struct
 end
 
 let print_code ?(n=3) ?(xts=Extensions.list) () =
-  print_string (Buffer.contents (Generator.in_buffer n xts))
+  print_string (Buffer.contents (Gen.in_buffer n xts))
 
 let write_code ?(n=3) ?(xts=Extensions.list) () =
-  Generator.separate_files n xts
+  Gen.separate_files n xts
+
+let arity = ref None
+let set_arity n =
+  arity := Some n
+
+let _ =
+  let speclist = [("-n", Arg.Int (set_arity), "Sets the arity (mandatory)")] in
+  let usage_msg = "Generate benchmarks"
+  in Arg.parse speclist print_endline usage_msg;
+     match !arity with
+     | Some n when n > 0 ->
+        write_code ~n:n ()
+     | _ -> print_string (Arg.usage_string speclist usage_msg)
 
 
 (*

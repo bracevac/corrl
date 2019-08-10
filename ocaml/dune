@@ -4,6 +4,6 @@
   (release
     (flags (:standard -thread -O3))))
 
-(executable
-  (name main)
+(executables
+  (names main generator)
   (libraries unix oml))
