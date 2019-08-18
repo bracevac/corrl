@@ -1,23 +1,25 @@
 (** Benchmarks statistics *)
 
 type t =
-  {  name: string;
-     arity: int;        (* Arity *)
-     count: int;        (* Total number of events *)
-     n_tested: int;     (* Number of tuples tested against pattern  *)
-     n_output: int;     (* Number of tuples yielded *)
-     t_latency: float;  (* avg. latency *)
-     t_gc: float;       (* time spent garbage collecting in reify *)
-     throughput: float; (* derivable by count/duration in the end *)
-     memory: float;     (* measure in eat *)
-     t_duration: float }  (* measure at start/end *)
+  {  mutable name: string;
+     mutable arity: int;        (* Arity *)
+     mutable count: int;        (* Number of events per stream *)
+     mutable n_tested: int;     (* Number of tuples tested against pattern  *)
+     mutable n_output: int;     (* Number of tuples yielded *)
+     mutable t_latency: float;  (* avg. latency *)
+     mutable aux_n_latency: int; (* number of latency measurements  *)
+     mutable aux_t_latency: float; (* current latency measurement *)
+     mutable t_gc: float;       (* avg. time spent garbage collecting mail in reify *)
+     mutable aux_n_gc: int;     (* number of gc time measurements *)
+     mutable throughput: float; (* derivable by count/duration in the end *)
+     mutable memory: float;     (* measure in eat *)
+     mutable t_duration: float }  (* measure at start/end *)
+
 
 
 (*
 count, memory utilization: in the eats/interleaved bind
-n_tested/output: in reify
 latency: start in eat, end in reify, need aux var!
-gc: in reify
 
 
 *)
@@ -29,10 +31,34 @@ let fresh_stat name arity event_count =
         n_tested = 0;
         n_output = 0;
         t_latency = 0.0;
+        aux_n_latency = 0;
+        aux_t_latency = -1.0;
         t_gc = 0.0;
+        aux_n_gc = 0;
         throughput = 0.0;
         memory = 0.0;
         t_duration = 0.0 }
+
+(* TODO move it somewhere else *)
+let now = Unix.gettimeofday
+
+let update_latency stat =
+  if stat.aux_t_latency >= 0.0  then
+    begin
+      stat.aux_n_latency <- stat.aux_n_latency + 1;
+      stat.t_latency <- stat.t_latency +. (now () -. stat.aux_t_latency);
+      stat.aux_t_latency <- -1.0
+    end
+  else ()
+
+let gc_time stat action =
+  let start = now () in
+  begin
+    action ();
+    stat.aux_n_gc <- stat.aux_n_gc + 1;
+    stat.t_gc <- stat.t_gc +. ((now () -. start))
+  end
+
 
 effect InjectStat: t
 let injectStat () = perform InjectStat

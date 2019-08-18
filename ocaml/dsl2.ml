@@ -5,29 +5,9 @@ open Core2
 open Symantics
 open Stat
 
-(* Generates the interleaved push iterations over n reactives *)
-let interleaved_bind2: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> unit -> unit =
-  let rec thunk_list: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> (unit -> unit) list =
-    fun slots suspensions ->
-    match slots, suspensions with
-    | Slots.Z, Suspensions.Z -> (fun Reacts.Z -> [])
-    | Slots.(S (s,ss)), Suspensions.(S (c,cs)) ->
-       let module S = (val s) in
-       let suspendable_strand r () =
-         try (Reactive.eat (S.push) r) with
-         | effect (S.Push x) k ->
-            S.push x;
-            c.guard (continue k)
-       in
-       let next = thunk_list ss cs in
-       (fun Reacts.(S (r,rs)) ->
-         (suspendable_strand r) :: (next rs))
-  in (fun slots suspensions ->
-      let mk_thunks = thunk_list slots suspensions in
-      fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs))) (* TODO: generate the array right away *)
 
-
-(* Tagless interpreter denoting join patterns as cartesius computations *)
+(* Tagless interpreter denoting join patterns as cartesius computations.
+   This version add instrumenation. *)
 module Cartesius = struct
   open Hlists
 
@@ -78,7 +58,6 @@ module Cartesius = struct
        let (next,cs,meta) = decompose (n,xs) es in
        (((e,t), next), Counts.(cons count cs), MCtx.cons t meta)
 
-  (* TODO: let the shape representation be thunks of reactives instead of reactives. *)
   let join: type s a b. (s, a) ctx -> s ext -> (a -> (s,b) pat) -> b shape repr = fun ctx ext body ->
     let decompose = decompose ctx in
     let (_,ctx) = ctx in
@@ -103,13 +82,13 @@ module Cartesius = struct
     in
     let inputs = MCR.(map {f = fun (Bind r) -> r}) ctx in
     let streams = interleaved_bind slots mailboxes suspensions inputs in
+    let stat = injectStat () in
     let out: b evt r = Reactive.create () in
-    (* have local reifier for now, but could in principle plug into a larger runtime system *)
     let sys_handler action =
-      let cursor = ref out in
       try action () with
       | effect (YF.Yield evt) k ->
-         cursor := Reactive.resolve_next !cursor evt;
+         stat.n_output <- stat.n_output + 1;
+         update_latency stat;
          continue k ()
     in
     let _ = Async.async (fun () -> (sys_handler |+| join_handler) streams) in

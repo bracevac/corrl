@@ -109,6 +109,7 @@ let gc slots =
 
   (* Implements the generic cartesian product.  *)
 let reify slots mboxes consumer =
+  let stat = injectStat () in
   h_gen () slots (fun (s: (module SLOT)) ->
       let module S = (val s) in
       (fun action ->
@@ -121,8 +122,10 @@ let reify slots mboxes consumer =
              end
            in
            (* For simplicity, we supply a consumer function for the tuples. In the paper, we provisioned a dedicated trigger effect for signaling each tuple. *)
-           List.iter consumer (Mailboxes.cart mail (fun x -> [x]));
-           gc slots;
+           List.iter consumer (Mailboxes.cart mail (fun x ->
+                                   stat.n_tested <- stat.n_tested + 1;
+                                   [x]));
+           gc_time stat (fun () -> gc slots);
            continue k ()))
 
 let join_shape slots mail restriction consumer =
@@ -142,8 +145,9 @@ let interleaved_bind: type a. a Slots.hlist -> a MBoxRefs.hlist -> a Suspensions
     | Slots.Z, MBoxRefs.Z, Suspensions.Z -> (fun Reacts.Z -> [])
     | Slots.(S (s,ss)), MBoxRefs.(S (m,ms)), Suspensions.(S (c,cs)) ->
        let module S = (val s) in
+       let stat = injectStat () in
        let suspendable_strand r () =
-         let f ev = S.push ev in (* TODO: measurement code *)
+         let f ev = S.push ev in (* TODO: measurement code: latency, mailbox *)
          try (Reactive.eat f r) with
          | effect (S.Push x) k ->
             S.push x;

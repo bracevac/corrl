@@ -34,7 +34,6 @@ let randArray n =
 (* let repetitions = 10 *)
 let repetitions = 1 (* TODO for testing *)
 let samples = 10
-let now = Unix.gettimeofday
 let event_count = 1000
 let flag_debug = true
 
@@ -65,10 +64,18 @@ let measure title instances =
     Gc.compact ();
     let measurements = Array.init repetitions (fun _ -> fresh_stat name arity event_count) in
     for m= 0 to (repetitions - 1) do
+      let stat = measurements.(m) in
       let t_start = now () in
-      let _ = println name in (* TODO *)
+      let _ = begin
+          match println name with  (* TODO *)
+          | () -> ()
+          | effect InjectStat k -> continue k stat
+          | effect Terminate _ -> ()
+          end
+      in
       let duration = now () -. t_start in
-      measurements.(m) <- { measurements.(m) with t_duration = duration }
+      stat.t_duration <- duration;
+      stat.throughput <- (float_of_int (stat.arity * stat.count)) /. duration
     done;
     results.(r) <- post_process measurements
   done;
