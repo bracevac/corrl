@@ -7,27 +7,17 @@ type t =
      sample_freq: int;  (* Sample frequency in number of events observed *)
      mutable n_tested: int;     (* Number of tuples tested against pattern  *)
      mutable n_output: int;     (* Number of tuples yielded *)
-     mutable t_latency: float;  (* avg. latency *)
+     mutable t_latency: float;  (* avg. latency (ns) *)
      mutable aux_n_latency: int; (* number of latency measurements  *)
-     mutable aux_t_latency: float; (* current latency measurement *)
-     mutable t_gc: float;       (* avg. time spent garbage collecting mail in reify *)
+     mutable aux_t_latency: Mtime.span; (* accumulated latency measurements *)
+     mutable aux_c_latency: Mtime_clock.counter option; (* current latency time counter *)
+     mutable t_gc: float;       (* avg. time spent garbage collecting mail in reify (ns) *)
+     mutable aux_t_gc: Mtime.span; (* accumulated gc times *)
      mutable aux_n_gc: int;     (* number of gc time measurements *)
      mutable throughput: float; (* derivable by count/duration in the end *)
      mutable memory: float;     (* measure in eat *)
      mutable n_memory_samples: int;     (* measure in eat *)
-     mutable t_duration: float }  (* measure at start/end *)
-
-
-
-(*
-count, memory utilization: in the eats/interleaved bind
-latency: start in eat, end in reify, need aux var!
-
-
-*)
-
-(* TODO move it somewhere else *)
-let now = Unix.gettimeofday
+     mutable t_duration: Mtime.span }  (* measure at start/end (seconds) *)
 
 let fresh_stat name arity event_count freq =
       { name = name;
@@ -38,28 +28,30 @@ let fresh_stat name arity event_count freq =
         n_output = 0;
         t_latency = 0.0;
         aux_n_latency = 0;
-        aux_t_latency = -1.0;
+        aux_t_latency = Mtime.Span.zero;
+        aux_c_latency = None;
         t_gc = 0.0;
+        aux_t_gc = Mtime.Span.zero;
         aux_n_gc = 0;
         throughput = 0.0;
         memory = 0.0;
         n_memory_samples = 0;
-        t_duration = 0.0 }
+        t_duration = Mtime.Span.zero }
 
-let finalize stat =
-  stat.t_latency <- stat.t_latency /. (float_of_int stat.aux_n_latency);
-  stat.t_gc <- stat.t_gc /. (float_of_int stat.aux_n_gc);
-  stat.memory <- stat.memory /. (float_of_int stat.n_memory_samples);
-  stat.t_duration <- now () -. stat.t_duration;
-  stat.throughput <- (float_of_int (stat.arity * stat.count)) /. stat.t_duration
+let finalize stat counter =
+  stat.t_latency  <- (Mtime.Span.to_ns stat.aux_t_latency) /. (float_of_int stat.aux_n_latency);
+  stat.t_gc       <- (Mtime.Span.to_ns stat.aux_t_gc) /. (float_of_int stat.aux_n_gc);
+  stat.memory     <- stat.memory /. (float_of_int stat.n_memory_samples);
+  stat.t_duration <- Mtime_clock.count counter;
+  stat.throughput <- (float_of_int (stat.arity * stat.count)) /. (Mtime.Span.to_s stat.t_duration)
 
 
 let gc_time stat action =
-  let start = now () in
+  let start = Mtime_clock.now () in
   begin
     action ();
     stat.aux_n_gc <- stat.aux_n_gc + 1;
-    stat.t_gc <- stat.t_gc +. ((now () -. start))
+    stat.aux_t_gc <- Mtime.Span.add stat.aux_t_gc (Mtime.span (Mtime_clock.now ()) start)
   end
 
 let mem_sample stat n thnk =
@@ -71,25 +63,26 @@ let mem_sample stat n thnk =
   else ()
 
 let begin_latency_sample stat n =
-  if ((n mod stat.sample_freq) = 0) && (stat.aux_t_latency < 0.0) then
-    stat.aux_t_latency <- now ()
-  else ()
+  match stat.aux_c_latency, (n mod stat.sample_freq) with
+  | None, 0 ->
+     stat.aux_c_latency <- Some (Mtime_clock.counter ())
+  | _, _ -> ()
 
 let end_latency_sample stat =
-  if stat.aux_t_latency >= 0.0  then
-    begin
-      stat.aux_n_latency <- stat.aux_n_latency + 1;
-      stat.t_latency <- stat.t_latency +. (now () -. stat.aux_t_latency);
-      stat.aux_t_latency <- -1.0
-    end
-  else ()
+  match stat.aux_c_latency with
+  | Some c ->
+     stat.aux_n_latency <- stat.aux_n_latency + 1;
+     stat.aux_t_latency <- Mtime.Span.add stat.aux_t_latency (Mtime_clock.count c);
+     stat.aux_c_latency <- None
+  | _ -> ()
+
 
 effect InjectStat: t
 let injectStat () = perform InjectStat
 effect Terminate: 'a
 let terminate () = perform Terminate
 
-let csv_header = "name,arity,count,n_tested,n_output,t_latency,t_gc,throughput,memory,t_duration"
+let csv_header = "name,arity,count,n_tested,n_output,t_latency (ns),t_gc (ns),throughput,memory,t_duration (s)"
 let to_csv_row stat =
   Printf.sprintf "\"%s\",\"%d\",\"%d\",\"%d\",\"%d\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\""
     stat.name
@@ -101,7 +94,7 @@ let to_csv_row stat =
     stat.t_gc
     stat.throughput
     stat.memory
-    stat.t_duration
+    (Mtime.Span.to_s stat.t_duration)
 
 type table = t array
 

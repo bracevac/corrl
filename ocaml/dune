@@ -6,4 +6,4 @@
 
 (executable
   (name main)
-  (libraries unix oml mtime))
+  (libraries unix oml mtime mtime.clock.os))

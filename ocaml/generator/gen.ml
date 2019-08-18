@@ -200,7 +200,7 @@ let write_dune_file n =
       out (Printf.sprintf "%s " (Gen.title n i))
     done;
     out ")\n";
-  out "(libraries unix oml mtime)";
+  out "(libraries unix oml mtime mtime.clock.os)";
   out ")\n";
   close_out oc
 

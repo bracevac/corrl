@@ -65,7 +65,7 @@ let measure title instances =
     let measurements = Array.init repetitions (fun _ -> fresh_stat name arity event_count samples) in
     for m = 0 to (repetitions - 1) do
       let stat = measurements.(m) in
-      let _ = stat.t_duration <- now () in
+      let counter = Mtime_clock.counter () in
       let _ = begin
           match Async.run join with
           | x -> ()
@@ -73,7 +73,7 @@ let measure title instances =
           | effect Terminate _ -> ()
           end
       in
-      finalize stat
+      finalize stat counter
     done;
     results.(r) <- post_process measurements
   done;
