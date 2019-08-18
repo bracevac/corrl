@@ -2,6 +2,7 @@ open Prelude
 open Hlists
 open Slot
 open Yieldfail
+open Stat
 
 module Reacts = HList(struct type 'a t = 'a evt r end)
 module Events = HList(struct type 'a t = 'a evt * (Count.t ref) end)
@@ -44,6 +45,12 @@ module Slots = struct
        MailboxDrefs.cons (S.getMail) (mailboxes hs)
 end
 
+module MBoxRefs = HList(struct type 'a t = 'a mailbox ref end)
+let mk_mboxrefs: type a. a Slots.hlist -> a MBoxRefs.hlist = fun slots ->
+  let module M = HMAP(Slots)(MBoxRefs) in
+  M.map {M.f = fun _ -> ref []} slots
+
+
 (* For now, we give each slot the suspension capability by default. Ideally, such capabilities should be present
    only when required by an externally supplied restriction handler. *)
 module Suspensions = struct
@@ -66,19 +73,20 @@ let h_gen () =
                  (mk (abstract slot)) |+| (handler ())
                      }) slots)
 
-(* Arity generic join implementation. *)
 
-  (* Handles the ambient mailbox state for each slot. *)
-  (* Projecting to a uniformly-typed list of abstract SLOT modules makes it easier to generate handlers of
-     generative effects.  *)
-let memory slots =
-  h_gen () slots (fun (s: (module SLOT)) ->
-      let module S = (val s) in
-      let mem: S.t mailbox ref = ref [] in
-      (fun action ->
-        try action () with
-        | effect (S.GetMail) k -> continue k !mem
-        | effect (S.SetMail l) k -> mem := l; continue k ()))
+(* Arity generic join implementation. *)
+let rec memory: type a. a Slots.hlist -> a MBoxRefs.hlist -> (unit -> unit) -> unit =
+ fun slots mboxrefs ->
+  match slots, mboxrefs with
+  | Slots.Z, MBoxRefs.Z -> (fun action -> action ())
+  | Slots.(S (s,ss)), MBoxRefs.(S (m,ms)) ->
+     let rest = memory ss ms in
+     let module S = (val s) in
+     let mem: S.t mailbox ref = m in
+     (fun action ->
+       try rest action with
+       | effect (S.GetMail) k -> continue k !mem
+       | effect (S.SetMail l) k -> mem := l; continue k ())
 
   (* Default behavior: enqueue each observed event notification in the corresponding mailbox. *)
 let forAll slots =
@@ -117,34 +125,35 @@ let reify slots mboxes consumer =
            gc slots;
            continue k ()))
 
-let join_shape slots restriction consumer =
+let join_shape slots mail restriction consumer =
   let module SMBD = HMAP(Slots)(MailboxDrefs) in
   let module FS = HFOLD(Slots) in
   let mboxes = SMBD.(map {f = fun s -> (getMail_of s) }) slots in
-  (memory slots)
+  (memory slots mail)
   |+| (reify slots mboxes consumer)
   |+| restriction
   |+| (forAll slots)
 
 (* Generates the interleaved push iterations over n reactives *)
-let interleaved_bind: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> unit -> unit =
-  let rec thunk_list: type a. a Slots.hlist -> a Suspensions.hlist -> a Reacts.hlist -> (unit -> unit) list =
-    fun slots suspensions ->
-    match slots, suspensions with
-    | Slots.Z, Suspensions.Z -> (fun Reacts.Z -> [])
-    | Slots.(S (s,ss)), Suspensions.(S (c,cs)) ->
+let interleaved_bind: type a. a Slots.hlist -> a MBoxRefs.hlist -> a Suspensions.hlist -> a Reacts.hlist -> unit -> unit =
+  let rec thunk_list: type a. a Slots.hlist -> a MBoxRefs.hlist -> a Suspensions.hlist -> a Reacts.hlist -> (unit -> unit) list =
+    fun slots mail suspensions ->
+    match slots, mail, suspensions with
+    | Slots.Z, MBoxRefs.Z, Suspensions.Z -> (fun Reacts.Z -> [])
+    | Slots.(S (s,ss)), MBoxRefs.(S (m,ms)), Suspensions.(S (c,cs)) ->
        let module S = (val s) in
        let suspendable_strand r () =
-         try (Reactive.eat (S.push) r) with
+         let f ev = S.push ev in (* TODO: measurement code *)
+         try (Reactive.eat f r) with
          | effect (S.Push x) k ->
             S.push x;
             c.guard (continue k)
        in
-       let next = thunk_list ss cs in
+       let next = thunk_list ss ms cs in
        (fun Reacts.(S (r,rs)) ->
          (suspendable_strand r) :: (next rs))
-  in (fun slots suspensions ->
-      let mk_thunks = thunk_list slots suspensions in
+  in (fun slots mail suspensions ->
+      let mk_thunks = thunk_list slots mail suspensions in
       fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs))) (* TODO: generate the array right away *)
 
 (* TODOs: *)

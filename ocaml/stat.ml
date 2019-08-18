@@ -12,6 +12,16 @@ type t =
      memory: float;     (* measure in eat *)
      t_duration: float }  (* measure at start/end *)
 
+
+(*
+count, memory utilization: in the eats/interleaved bind
+n_tested/output: in reify
+latency: start in eat, end in reify, need aux var!
+gc: in reify
+
+
+*)
+
 let fresh_stat name arity event_count =
       { name = name;
         arity = arity;
@@ -23,6 +33,11 @@ let fresh_stat name arity event_count =
         throughput = 0.0;
         memory = 0.0;
         t_duration = 0.0 }
+
+effect InjectStat: t
+let injectStat () = perform InjectStat
+effect Terminate: 'a
+let terminate () = perform Terminate
 
 let csv_header = "name,arity,count,n_tested,n_output,t_latency,t_gc,throughput,memory,t_duration"
 let to_csv_row stat =

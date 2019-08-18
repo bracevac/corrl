@@ -89,7 +89,8 @@ module Cartesius = struct
     let suspensions = mk_suspensions slots in
     let yf: b yieldfail = mk_yieldfail () in
     let module YF = (val yf) in
-    let join_handler = join_shape slots (ext slots suspensions) (fun tuple ->
+    let mailboxes = mk_mboxrefs slots in
+    let join_handler = join_shape slots mailboxes (ext slots suspensions) (fun tuple ->
                            try
                              begin
                                let (vars,counts,metas) = decompose tuple in
@@ -101,7 +102,7 @@ module Cartesius = struct
                            | effect YF.Fail _ -> ())
     in
     let inputs = MCR.(map {f = fun (Bind r) -> r}) ctx in
-    let streams = interleaved_bind slots suspensions inputs in
+    let streams = interleaved_bind slots mailboxes suspensions inputs in
     let out: b evt r = Reactive.create () in
     (* have local reifier for now, but could in principle plug into a larger runtime system *)
     let sys_handler action =
