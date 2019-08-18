@@ -88,7 +88,7 @@ module Cartesius = struct
       try action () with
       | effect (YF.Yield evt) k ->
          stat.n_output <- stat.n_output + 1;
-         update_latency stat;
+         end_latency_sample stat;
          continue k ()
     in
     let _ = Async.async (fun () -> (sys_handler |+| join_handler) streams) in

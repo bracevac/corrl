@@ -45,10 +45,15 @@ module Slots = struct
        MailboxDrefs.cons (S.getMail) (mailboxes hs)
 end
 
-module MBoxRefs = HList(struct type 'a t = 'a mailbox ref end)
+module MBoxRefs = struct
+  include HList(struct type 'a t = 'a mailbox ref end)
+end
 let mk_mboxrefs: type a. a Slots.hlist -> a MBoxRefs.hlist = fun slots ->
   let module M = HMAP(Slots)(MBoxRefs) in
   M.map {M.f = fun _ -> ref []} slots
+let mboxrefs_size ms =
+  let module F = HFOLD(MBoxRefs) in
+  F.fold { zero = 0; succ = (fun mbox n -> (List.length !mbox) + (n ())) } ms
 
 
 (* For now, we give each slot the suspension capability by default. Ideally, such capabilities should be present
@@ -138,27 +143,45 @@ let join_shape slots mail restriction consumer =
   |+| (forAll slots)
 
 (* Generates the interleaved push iterations over n reactives *)
-let interleaved_bind: type a. a Slots.hlist -> a MBoxRefs.hlist -> a Suspensions.hlist -> a Reacts.hlist -> unit -> unit =
-  let rec thunk_list: type a. a Slots.hlist -> a MBoxRefs.hlist -> a Suspensions.hlist -> a Reacts.hlist -> (unit -> unit) list =
-    fun slots mail suspensions ->
-    match slots, mail, suspensions with
-    | Slots.Z, MBoxRefs.Z, Suspensions.Z -> (fun Reacts.Z -> [])
-    | Slots.(S (s,ss)), MBoxRefs.(S (m,ms)), Suspensions.(S (c,cs)) ->
+let interleaved_bind: type a. a Slots.hlist ->
+                           a MBoxRefs.hlist ->
+                           a Suspensions.hlist ->
+                           a Reacts.hlist ->
+                           unit -> unit = fun slots mail suspensions ->
+  let active_strands = ref (Slots.length slots) in (* for termination checking *)
+  let n_events = ref 0 in (* number of pushed events so far *)
+  let rec thunk_list: type a. a Slots.hlist ->
+                           a Suspensions.hlist ->
+                           a Reacts.hlist ->
+                           (unit -> unit) list = fun slots suspensions ->
+    match slots, suspensions with
+    | Slots.Z, Suspensions.Z -> (fun Reacts.Z -> [])
+    | Slots.(S (s,ss)), Suspensions.(S (c,cs)) ->
        let module S = (val s) in
        let stat = injectStat () in
+       let on_next ev =
+         S.push ev;
+         n_events += 1;
+         mem_sample stat !n_events (fun () -> mboxrefs_size mail);
+         begin_latency_sample stat !n_events
+       in (* TODO: measurement code: latency, mailbox *)
+       let on_done () =
+         active_strands -= 1;
+         if !active_strands = 0 then
+           terminate ()
+         else ()
+       in
        let suspendable_strand r () =
-         let f ev = S.push ev in (* TODO: measurement code: latency, mailbox *)
-         try (Reactive.eat f r) with
+         try (Reactive.eat_with on_next on_done r) with
          | effect (S.Push x) k ->
             S.push x;
             c.guard (continue k)
        in
-       let next = thunk_list ss ms cs in
-       (fun Reacts.(S (r,rs)) ->
-         (suspendable_strand r) :: (next rs))
-  in (fun slots mail suspensions ->
-      let mk_thunks = thunk_list slots mail suspensions in
-      fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs))) (* TODO: generate the array right away *)
+       let next = thunk_list ss cs in
+       (fun Reacts.(S (r,rs)) -> (suspendable_strand r) :: (next rs))
+  in
+  let mk_thunks = thunk_list slots suspensions in
+      fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs)) (* TODO: generate the array right away *)
 
 (* TODOs: *)
 (* More tests for the aligning handler

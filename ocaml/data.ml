@@ -51,10 +51,12 @@ module Reactive = struct
     let next = create () in
     Async.resolve react (RCons (v,next));
     next
-  let rec eat f stream =
+
+  let rec eat_with cons nil stream =
     match Async.await stream with
-    | RCons (hd, tl) -> (f hd); eat f tl
-    | RNil -> ()
+    | RCons (hd, tl) -> (cons hd); eat_with cons nil tl
+    | RNil -> nil ()
+  let eat f stream = eat_with f (fun () -> ()) stream
 end
 
 include Count

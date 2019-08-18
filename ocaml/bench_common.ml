@@ -58,11 +58,11 @@ let write_csv title results =
 
 let measure title instances =
   let num = Queue.length instances in
-  let results = Array.init num (fun _ -> fresh_stat "" 0 0) in
+  let results = Array.init num (fun _ -> fresh_stat "" 0 0 0) in
   for r = 0 to (num - 1) do
     let (name,arity,join) = Queue.pop instances in
     Gc.compact ();
-    let measurements = Array.init repetitions (fun _ -> fresh_stat name arity event_count) in
+    let measurements = Array.init repetitions (fun _ -> fresh_stat name arity event_count samples) in
     for m= 0 to (repetitions - 1) do
       let stat = measurements.(m) in
       let t_start = now () in
