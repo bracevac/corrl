@@ -150,6 +150,7 @@ let interleaved_bind: type a. a Slots.hlist ->
                            unit -> unit = fun slots mail suspensions ->
   let active_strands = ref (Slots.length slots) in (* for termination checking *)
   let n_events = ref 0 in (* number of pushed events so far *)
+  let stat = injectStat () in
   let rec thunk_list: type a. a Slots.hlist ->
                            a Suspensions.hlist ->
                            a Reacts.hlist ->
@@ -158,7 +159,6 @@ let interleaved_bind: type a. a Slots.hlist ->
     | Slots.Z, Suspensions.Z -> (fun Reacts.Z -> [])
     | Slots.(S (s,ss)), Suspensions.(S (c,cs)) ->
        let module S = (val s) in
-       let stat = injectStat () in
        let on_next ev =
          S.push ev;
          n_events += 1;

@@ -177,10 +177,12 @@ module Extensions = struct
                     enclose (fun () -> emit "aligning "; enclose (fun () -> mptrs n ()));
                     emit " |++| "; (range "most_recently" extplus ptr n ()))
 
-  let list = [{name = "cartesian";     code = (fun _ _ -> emit "CB.empty_ext") };
-              {name = "most_recently"; code = most_recently};
-              {name = "affinely";      code = affinely};
-              {name = "aligning";      code = aligning}]
+  (* let list = [{name = "cartesian";     code = (fun _ _ -> emit "CB.empty_ext") };
+   *             {name = "most_recently"; code = most_recently};
+   *             {name = "affinely";      code = affinely};
+   *             {name = "aligning";      code = aligning}] *)
+  let list = [{name = "most_recently"; code = most_recently};
+              {name = "affinely";      code = affinely}]
 end
 
 let print_code ?(n=3) ?(xts=Extensions.list) () =
@@ -198,7 +200,7 @@ let write_dune_file n =
       out (Printf.sprintf "%s " (Gen.title n i))
     done;
     out ")\n";
-  out "(libraries unix oml)";
+  out "(libraries unix oml mtime)";
   out ")\n";
   close_out oc
 
@@ -215,142 +217,3 @@ let _ =
         write_code ~n:n ();
         write_dune_file n
      | _ -> print_string (Arg.usage_string speclist usage_msg)
-
-
-(*
- *     let eat_all _ =
- *       let num = ref 0 in
- *       let (stat, (s0,s1,s2)) = inject () in
- *       let samplePeriod = arity * !stat.count / samples in
- *       let refreshStat () =
- *         begin
- *           match (!num mod samplePeriod) with
- *           | 0 -> stat := { !stat with memory = !stat.memory +. (float_of_int (lengths ())) }
- *           | _ -> ()
- *         end
- *       in
- *       let (i0,i1,i2) = (ref 0, ref 0, ref 0) in
- *       let rec select tries i =
- *         begin
- *           (\* print_int tries;
- *            * print_int i;
- *            * print_newline(); *\)
- *           let next = (i + 1) mod 3 in
- *           begin
- *             match (tries,i) with
- *             |(0,_) -> stat := { !stat with memory = !stat.memory /. (float_of_int samples)   };
- *               terminate () (\* all done, quit *\)
- *             |(_,0) ->
- *               if (!i0 < Array.length s0) then
- *                 begin
- *                   S0.push (Array.get s0 !i0);
- *                   num := !num + 1;
- *                   i0 := !i0 + 1;
- *                   refreshStat ();
- *                   select 3 1
- *                 end
- *               else
- *                 select (tries - 1) next
- *             |(_,1) ->
- *               if (!i1 < Array.length s1) then
- *                 begin
- *                   S1.push (Array.get s1 !i1);
- *                   num := !num + 1;
- *                   i1 := !i1 + 1;
- *                   refreshStat ();
- *                   select 3 2
- *                 end
- *               else
- *                 select (tries - 1) next
- *             |(_,2) ->
- *               if (!i2 < Array.length s2) then
- *                 begin
- *                   S2.push (Array.get s2 !i2);
- *                   num := !num + 1;
- *                   i2 := !i2 + 1;
- *                   refreshStat ();
- *                   select 3 0
- *                 end
- *               else
- *                 select (tries - 1) next
- *             | _ -> print_string "BAD\n"; print_newline();
- *           end
- *         end
- *       in (select 3 0)
- *   end
- *
- *
- * let measure key count thunk =
- *   let a1 = randArray count in
- *   let a2 = randArray count in
- *   let a3 = randArray count in
- *   let stat = freshStat key count in
- *   let start = now () in
- *   begin try (thunk stat) with
- *     | effect Terminate _ -> ()
- *     | effect Inject k -> continue k (stat, (a1,a2,a3))
- *   end;
- *   let duration = now () -. start in
- *   stat := { !stat with duration = duration;
- *                        throughput = (float_of_int (arity * count)) /. duration };
- *   print_string (to_csv_row !stat);
- *   print_newline ();
- *   ()
- * (\* stat *\)
- *
- *
- * let run tests =
- *   print_string csv_header;
- *   print_newline ();
- *   List.iter
- *     (fun (key, counts, thunk) ->
- *        List.iter
- *          (fun count ->
- *             measure key count thunk)
- *          counts)
- *     tests
- *
- * let context stat action =
- *   let onDone _ =
- *     stat := { !stat with n_output = !stat.n_output + 1 }
- *   in
- *   ManyWorlds.handler onDone action
- *
- *
- * module SingleWorldBench = struct
- *   effect Yield  : Join3Bench.result -> unit
- *     effect Cancel : unit
- *
- *   let yield x = perform (Yield x)
- *   let cancel () = perform Cancel
- *
- *   let handler action =
- *     match action () with
- *     | effect (Yield v) k -> continue k ()
- *     | effect Cancel k -> continue k ()
- *     | x -> ()
- * end
- *
- * let cartesian3 stat =
- *   let dummy = toR([Ev (0, (1,1))]) in
- *   let module J = Join3Bench in
- *   let module S = SingleWorldBench in
- *   context
- *     stat
- *     (fun () ->
- *        S.handler
- *          (J.correlate (fun () ->
- *               J.join (dummy,dummy,dummy) (function
- *                   | (Ev (x,i1),Ev (y,i2),Ev (z,i3)) ->
- *                     stat := { !stat with n_tested = !stat.n_tested + 1 };
- *                     stat := { !stat with n_output = !stat.n_output + 1 };
- *                     S.yield (Ev ((x,y,z), i1 |@| i2 |@| i3))))))
- *
- * let tests =
- *   [
- *     ("cartesian",  [370],            cartesian3); (\* cartesian is way too slow for other input sizes  *\)
- *     ("mostRecent", [370;3700;37000;370000;3700000], mostRecent3);
- *     ("affine",     [370;3700;37000;370000;3700000], affine3_123);
- *     ("zip",        [370;3700;37000;370000;3700000], zip3)
- *   ]
-*)

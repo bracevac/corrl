@@ -26,6 +26,9 @@ latency: start in eat, end in reify, need aux var!
 
 *)
 
+(* TODO move it somewhere else *)
+let now = Unix.gettimeofday
+
 let fresh_stat name arity event_count freq =
       { name = name;
         arity = arity;
@@ -43,8 +46,13 @@ let fresh_stat name arity event_count freq =
         n_memory_samples = 0;
         t_duration = 0.0 }
 
-(* TODO move it somewhere else *)
-let now = Unix.gettimeofday
+let finalize stat =
+  stat.t_latency <- stat.t_latency /. (float_of_int stat.aux_n_latency);
+  stat.t_gc <- stat.t_gc /. (float_of_int stat.aux_n_gc);
+  stat.memory <- stat.memory /. (float_of_int stat.n_memory_samples);
+  stat.t_duration <- now () -. stat.t_duration;
+  stat.throughput <- (float_of_int (stat.arity * stat.count)) /. stat.t_duration
+
 
 let gc_time stat action =
   let start = now () in
@@ -98,4 +106,4 @@ let to_csv_row stat =
 type table = t array
 
 let to_csv table =
-  String.concat "\n" Array.(to_list (map to_csv_row table))
+  String.concat "\n" (csv_header :: Array.(to_list (map to_csv_row table)))

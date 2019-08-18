@@ -33,8 +33,8 @@ let randArray n =
 (* Global parameters *)
 (* let repetitions = 10 *)
 let repetitions = 1 (* TODO for testing *)
-let samples = 10
-let event_count = 1000
+let samples = 2
+let event_count = 1000000
 let flag_debug = true
 
 let debug s =
@@ -63,19 +63,17 @@ let measure title instances =
     let (name,arity,join) = Queue.pop instances in
     Gc.compact ();
     let measurements = Array.init repetitions (fun _ -> fresh_stat name arity event_count samples) in
-    for m= 0 to (repetitions - 1) do
+    for m = 0 to (repetitions - 1) do
       let stat = measurements.(m) in
-      let t_start = now () in
+      let _ = stat.t_duration <- now () in
       let _ = begin
-          match println name with  (* TODO *)
-          | () -> ()
+          match Async.run join with
+          | x -> ()
           | effect InjectStat k -> continue k stat
           | effect Terminate _ -> ()
           end
       in
-      let duration = now () -. t_start in
-      stat.t_duration <- duration;
-      stat.throughput <- (float_of_int (stat.arity * stat.count)) /. duration
+      finalize stat
     done;
     results.(r) <- post_process measurements
   done;
