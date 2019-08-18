@@ -27,14 +27,14 @@ let rand_stream n =
     !res
   end
 
-let randArray n =
+let rand_array n =
   Array.init n (fun i -> (Ev (Random.int 1073741823, (i,i))))
 
 (* Global parameters *)
 (* let repetitions = 10 *)
 let repetitions = 1 (* TODO for testing *)
-let samples = 2
-let event_count = 1000000
+let samples = 1000000
+let event_count = 33333333
 let flag_debug = true
 
 let debug s =
@@ -57,24 +57,30 @@ let write_csv title results =
   close_out oc
 
 let measure title instances =
+  let _ = Printf.printf "%s\n%!" title in
   let num = Queue.length instances in
   let results = Array.init num (fun _ -> fresh_stat "" 0 0 0) in
   for r = 0 to (num - 1) do
     let (name,arity,join) = Queue.pop instances in
+    Printf.printf "%s: setup\n%!" name;
     Gc.compact ();
     let measurements = Array.init repetitions (fun _ -> fresh_stat name arity event_count samples) in
     for m = 0 to (repetitions - 1) do
       let stat = measurements.(m) in
-      let counter = Mtime_clock.counter () in
-      let _ = begin
-          match Async.run join with
-          | x -> ()
-          | effect InjectStat k -> continue k stat
-          | effect Terminate _ -> ()
-          end
+      let j = try join () with (* Important to avoid measuring setup overhead *)
+              | effect InjectStat k -> continue k stat
       in
-      finalize stat counter
+      let _ = Printf.printf "%s: start\n%!" name in
+      let counter = Mtime_clock.counter () in
+      let _ =  match Async.run j with
+        | x -> ()
+        | effect InjectStat k -> continue k stat
+        | effect Terminate _ -> ()
+      in
+      finalize stat counter;
+      Printf.printf "%s: end\n%!" name
     done;
     results.(r) <- post_process measurements
   done;
-  write_csv title results
+  write_csv title results;
+  Printf.printf "%s: done\n%!" title

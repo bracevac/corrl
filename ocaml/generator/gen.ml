@@ -51,7 +51,7 @@ module Gen = struct
     emitln "let instances = Queue.create ()";
     emitln ""
 
-  let rand_stream = "from (rand_stream event_count)"
+  let rand_stream = "from (rand_array event_count)"
   let ctx' i = emit "CB."; enclose (fun () -> (range rand_stream ctxat (fun _ -> ()) i ()))
   let ctx i = emit (Printf.sprintf "let ctx%d () = " i); ctx' i; emit "\n"
 
@@ -183,6 +183,7 @@ module Extensions = struct
    *             {name = "aligning";      code = aligning}] *)
   let list = [{name = "most_recently"; code = most_recently};
               {name = "affinely";      code = affinely}]
+              (* {name = "aligning";      code = aligning}] *)
 end
 
 let print_code ?(n=3) ?(xts=Extensions.list) () =

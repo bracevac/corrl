@@ -142,21 +142,26 @@ let join_shape slots mail restriction consumer =
   |+| restriction
   |+| (forAll slots)
 
+let eat_a on_next on_done arr =
+  Array.iter (fun x -> on_next x; Async.yield ()) arr; on_done ()
+
+module Arrays = HList(struct type 'a t = 'a evt array end)
+
 (* Generates the interleaved push iterations over n reactives *)
 let interleaved_bind: type a. a Slots.hlist ->
                            a MBoxRefs.hlist ->
                            a Suspensions.hlist ->
-                           a Reacts.hlist ->
+                           a Arrays.hlist ->
                            unit -> unit = fun slots mail suspensions ->
   let active_strands = ref (Slots.length slots) in (* for termination checking *)
   let n_events = ref 0 in (* number of pushed events so far *)
   let stat = injectStat () in
   let rec thunk_list: type a. a Slots.hlist ->
                            a Suspensions.hlist ->
-                           a Reacts.hlist ->
+                           a Arrays.hlist ->
                            (unit -> unit) list = fun slots suspensions ->
     match slots, suspensions with
-    | Slots.Z, Suspensions.Z -> (fun Reacts.Z -> [])
+    | Slots.Z, Suspensions.Z -> (fun Arrays.Z -> [])
     | Slots.(S (s,ss)), Suspensions.(S (c,cs)) ->
        let module S = (val s) in
        let on_next ev =
@@ -164,7 +169,7 @@ let interleaved_bind: type a. a Slots.hlist ->
          n_events += 1;
          mem_sample stat !n_events (fun () -> mboxrefs_size mail);
          begin_latency_sample stat !n_events
-       in (* TODO: measurement code: latency, mailbox *)
+       in
        let on_done () =
          active_strands -= 1;
          if !active_strands = 0 then
@@ -172,13 +177,13 @@ let interleaved_bind: type a. a Slots.hlist ->
          else ()
        in
        let suspendable_strand r () =
-         try (Reactive.eat_with on_next on_done r) with
+         try (eat_a on_next on_done r) with
          | effect (S.Push x) k ->
             S.push x;
             c.guard (continue k)
        in
        let next = thunk_list ss cs in
-       (fun Reacts.(S (r,rs)) -> (suspendable_strand r) :: (next rs))
+       (fun Arrays.(S (r,rs)) -> (suspendable_strand r) :: (next rs))
   in
   let mk_thunks = thunk_list slots suspensions in
       fun rs () -> Async.interleaved (Array.of_list (mk_thunks rs)) (* TODO: generate the array right away *)

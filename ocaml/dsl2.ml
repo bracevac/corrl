@@ -6,6 +6,26 @@ open Symantics
 open Stat
 
 
+module ContextRepr(T: BaseTypes) = struct
+  open T
+  open Hlists
+  type (_,_) var = Bind: 'a shape repr -> ('a, 'a el_pat) var
+  module Ctx = HList(struct type 'a t = ('a, 'a el_pat) var end)
+
+  (* both phantom types must be part of the gadt definition, in order to properly inspect their shapes! *)
+  type (_,_) ctx' =
+    | Z: (unit,unit) ctx'
+    | S: ('s,'a) ctx' -> ('b * 's, 'b el_pat * 'a) ctx'
+  type ('s,'a) ctx = ('s,'a) ctx' * 's Ctx.hlist
+  let from: 'a shape repr -> ('a, 'a el_pat) var = fun s -> Bind s
+  let cnil: (unit,unit) ctx = (Z, Ctx.nil)
+  let (@.): type s s' a b. (s,a) var -> (s', b) ctx -> (s * s', a * b) ctx =
+    (fun v ctx ->
+      match v, ctx with
+      | (Bind _), (n,ctx) -> (S n, Ctx.cons v ctx))
+end
+
+
 (* Tagless interpreter denoting join patterns as cartesius computations.
    This version add instrumenation. *)
 module Cartesius = struct
@@ -22,16 +42,14 @@ module Cartesius = struct
 
   type 'a repr = 'a
   type 'a elem = 'a evt
-  type 'a shape = 'a elem r
+  type 'a shape = 'a elem array
   type 'a el_pat = 'a repr * meta repr
 
   let elem (x,y) = evt x y
   let el_pat (Ev (a,t)) = (a,t)
-  let lift: 'a elem repr list -> 'a shape repr = fun evts ->
-    Reactive.toR evts
 
   (* TODO: can we eliminate this boilerplate somehow? *)
-  include StdContextRepr(struct type 'a elem = 'a evt type 'a repr = 'a type meta = Interval.time type 'a shape = 'a evt r type 'a el_pat = 'a repr * meta repr end)
+  include StdContextRepr(struct type 'a elem = 'a evt type 'a repr = 'a type meta = Interval.time type 'a shape = 'a evt array type 'a el_pat = 'a repr * meta repr end)
 
   (* expressions *)
   let pair: 'a repr -> 'b repr -> ('a * 'b) repr  = fun x y -> (x,y)
@@ -58,11 +76,11 @@ module Cartesius = struct
        let (next,cs,meta) = decompose (n,xs) es in
        (((e,t), next), Counts.(cons count cs), MCtx.cons t meta)
 
-  let join: type s a b. (s, a) ctx -> s ext -> (a -> (s,b) pat) -> b shape repr = fun ctx ext body ->
+  let join: type s a b. (s, a) ctx -> s ext -> (a -> (s,b) pat) -> unit -> b shape repr = fun ctx ext body ->
     let decompose = decompose ctx in
     let (_,ctx) = ctx in
     let module M = HMAP(Ctx)(Slots) in
-    let module MCR = HMAP(Ctx)(Reacts) in
+    let module MCR = HMAP(Ctx)(Arrays) in
     let module FC = HFOREACH(Counts) in
     let slots = M.map {M.f = fun _ -> mk_slot ()} ctx in
     let suspensions = mk_suspensions slots in
@@ -82,15 +100,16 @@ module Cartesius = struct
     in
     let inputs = MCR.(map {f = fun (Bind r) -> r}) ctx in
     let streams = interleaved_bind slots mailboxes suspensions inputs in
-    let stat = injectStat () in
-    let out: b evt r = Reactive.create () in
-    let sys_handler action =
+    let out: b evt array = Array.init 0 (fun i -> Obj.magic i) in (*dummy value*)
+    let sys_handler stat action =
       try action () with
       | effect (YF.Yield evt) k ->
          stat.n_output <- stat.n_output + 1;
          end_latency_sample stat;
          continue k ()
     in
-    let _ = Async.async (fun () -> (sys_handler |+| join_handler) streams) in
-    out
+    (fun () ->
+      let stat = injectStat () in
+      let _ = Async.async (fun () -> ((sys_handler stat) |+| join_handler) streams) in
+      out)
 end

@@ -94,8 +94,8 @@ let aligning: type ctx xs a. (xs,ctx) mptr -> (ctx,a) chandler = (* TODO the cha
     let try_release k =
       if check_sync () then
         begin
-          reset_sync_state ();
           push_all ();
+          reset_sync_state ();
           play_all ();
           k ()
         end
