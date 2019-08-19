@@ -82,7 +82,7 @@ let injectStat () = perform InjectStat
 effect Terminate: 'a
 let terminate () = perform Terminate
 
-let csv_header = "name,arity,count,n_tested,n_output,t_latency (ns),t_gc (ns),throughput,memory,t_duration (s)"
+let csv_header = "name,arity,count,n_tested,n_output,t_latency_ns,t_gc_ns,throughput,memory,t_duration_s"
 let to_csv_row stat =
   Printf.sprintf "\"%s\",\"%d\",\"%d\",\"%d\",\"%d\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\""
     stat.name
@@ -99,4 +99,4 @@ let to_csv_row stat =
 type table = t array
 
 let to_csv table =
-  String.concat "\n" (csv_header :: Array.(to_list (map to_csv_row table)))
+  (String.concat "\n" (csv_header :: Array.(to_list (map to_csv_row table)))) ^ "\n"

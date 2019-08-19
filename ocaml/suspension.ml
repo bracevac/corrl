@@ -12,7 +12,7 @@ let mk () =
     | true -> ()
     | false ->
        match !cont with
-       | None -> failwith "resume called with no suspension"
+       | None -> state := true (* failwith "resume called with no suspension" *)
        | Some thunk -> cont := None; state := true; thunk ()
   in
   let guard k =

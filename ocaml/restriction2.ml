@@ -48,9 +48,15 @@ let affinely: type ctx i a. int -> (i,ctx) ptr -> (ctx,a) chandler =
          S.setMail (update (S.getMail ()) x (Count.Fin n));
          continue k (S.push x)))
 
-(* TODO: can we express requirements on shape of context, but what about the *capabilities* of each context element?
-Sam's paper on holes might be the solution! Also: couldn't we model a poor man's effect type system this way?
-For now, we assume that all slots have the capability of supension/resumption. *)
+(* Polymorphic shift/rest*)
+(* TODO: factor out to separate module*)
+type 'a polycont = { cont: 'b. ('a -> 'b) -> 'b }
+effect PolyShift: 'a polycont -> 'a
+let poly_shift f = perform (PolyShift f)
+let poly_reset action =
+  try action () with
+  | effect (PolyShift f) k -> f.cont (fun x -> continue k x)
+
 let aligning: type ctx xs a. (xs,ctx) mptr -> (ctx,a) chandler = (* TODO the chandler type should carry the suspension context *)
   (fun ptrs ctx suspensions ->
     let suspensions_ctx = SuspensionsPtr.mproj (ptrs ()) suspensions in
@@ -78,9 +84,10 @@ let aligning: type ctx xs a. (xs,ctx) mptr -> (ctx,a) chandler = (* TODO the cha
       F.fold {F.zero = (fun () -> ());
               F.succ = (fun (s,st) rest ->
                 let next = rest () in
-                match !st with
-                | Some x -> (fun () -> push s x; next ())
-                | _ -> failwith "aligning: illegal sync state in push_all"
+                (fun () ->
+                    match !st with
+                    | Some x ->  push s x; next ()
+                    | _ -> failwith "aligning: illegal sync state in push_all")
         )} sync_state
     in
     let play_all =
@@ -94,7 +101,15 @@ let aligning: type ctx xs a. (xs,ctx) mptr -> (ctx,a) chandler = (* TODO the cha
     let try_release k =
       if check_sync () then
         begin
-          push_all ();
+          poly_shift { cont = (fun cb ->
+              (* Subtletly: since we lack the ability to generate handlers that simultaneously
+                 handle all push effects, we have to stack handlers for each individual push effect.
+                 Consequence: the pushes in push_all might get accidentally handled by the stacked
+                 handlers. Hence we jump out of the handler stack to perform all the pushes,
+                 and jump back in with shift/reset.
+                *)
+              push_all ();
+              cb ()) };
           reset_sync_state ();
           play_all ();
           k ()
@@ -113,7 +128,7 @@ let aligning: type ctx xs a. (xs,ctx) mptr -> (ctx,a) chandler = (* TODO the cha
          in
          handler |+| (gen_handler ss sts)
     in
-    gen_handler suspensions_ctx sync_state)
+    poly_reset |+| (gen_handler suspensions_ctx sync_state))
 
 (* There are interesting use cases for working with sets of pointers (apart from restrictions that
 need to refer to more than one slot), e.g., bulk application of a given restriction to multiple
