@@ -5,8 +5,8 @@ type t =
      arity: int;        (* Arity *)
      count: int;        (* Number of events per stream *)
      sample_freq: int;  (* Sample frequency in number of events observed *)
-     mutable n_tested: int;     (* Number of tuples tested against pattern  *)
-     mutable n_output: int;     (* Number of tuples yielded *)
+     mutable n_tested: int64;     (* Number of tuples tested against pattern  *)
+     mutable n_output: int64;     (* Number of tuples yielded *)
      mutable t_latency: float;  (* avg. latency (ns) *)
      mutable aux_n_latency: int; (* number of latency measurements  *)
      mutable aux_t_latency: Mtime.span; (* accumulated latency measurements *)
@@ -19,13 +19,28 @@ type t =
      mutable n_memory_samples: int;     (* measure in eat *)
      mutable t_duration: Mtime.span }  (* measure at start/end (seconds) *)
 
+(* type t' =
+ *   {  name: string;
+ *      arity: int;        (\* Arity *\)
+ *      count: int;        (\* Number of events per stream *\)
+ *      sample_freq: int;  (\* Sample frequency in number of events observed *\)
+ *      mutable n_tested: int64;     (\* Number of tuples tested against pattern  *\)
+ *      mutable n_output: int64;     (\* Number of tuples yielded *\)
+ *      mutable t_latency: Mtime.span array;
+ *      mutable aux_c_latency: Mtime_clock.counter option; (\* current latency time counter *\)
+ *      mutable t_throughput: (int * Mtime.span) array;
+ *      mutable aux_c_throughput: Mtime_clock.counter option; (\* current throughput time counter *\)
+ *      mutable t_gc: Mtime.span array;       (\* avg. time spent garbage collecting mail in reify (ns) *\)
+ *      mutable memory: int64 array;     (\* measure in eat *\)
+ *      mutable t_duration: Mtime.span }  (\* measure at start/end (seconds) *\) *)
+
 let fresh_stat name arity event_count freq =
       { name = name;
         arity = arity;
         count = event_count;
         sample_freq = freq;
-        n_tested = 0;
-        n_output = 0;
+        n_tested = 0L;
+        n_output = 0L;
         t_latency = 0.0;
         aux_n_latency = 0;
         aux_t_latency = Mtime.Span.zero;
@@ -84,7 +99,7 @@ let terminate () = perform Terminate
 
 let csv_header = "name,arity,count,n_tested,n_output,t_latency_ns,t_gc_ns,throughput,memory,t_duration_s"
 let to_csv_row stat =
-  Printf.sprintf "\"%s\",\"%d\",\"%d\",\"%d\",\"%d\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\""
+  Printf.sprintf "\"%s\",\"%d\",\"%d\",\"%Ld\",\"%Ld\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\""
     stat.name
     stat.arity
     stat.count

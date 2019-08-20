@@ -104,7 +104,7 @@ module Cartesius = struct
     let sys_handler stat action =
       try action () with
       | effect (YF.Yield evt) k ->
-         stat.n_output <- stat.n_output + 1;
+         stat.n_output <- (Int64.add stat.n_output  1L);
          end_latency_sample stat;
          continue k ()
     in

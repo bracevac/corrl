@@ -33,8 +33,8 @@ let rand_array n =
 (* Global parameters *)
 (* let repetitions = 10 *)
 let repetitions = 1 (* TODO for testing *)
-let samples = 1000
-let event_count = 333333
+let samples = 100
+let event_count = 10000
 let flag_debug = true
 
 let debug s =
@@ -73,8 +73,11 @@ let measure title instances =
       let _ = Printf.printf "%s: start\n%!" name in
       let counter = Mtime_clock.counter () in
       let _ =  try Async.run j with
-               | Stack_overflow -> Printf.printf "Warning: Stack_overflow in %s\n%!" name
-               | Failure m -> Printf.printf "Warning: Failure '%s' in %s\n%!" m name
+               | Stack_overflow ->
+                  Printf.printf "Warning: Stack_overflow in %s\n%!" name;
+                  Printexc.print_backtrace stdout
+               | Failure m -> Printf.printf "Warning: Failure '%s' in %s\n%!" m name;
+                              Printexc.print_backtrace stdout
                | effect InjectStat k -> continue k stat
                | effect Terminate _ -> ()
       in

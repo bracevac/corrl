@@ -51,12 +51,12 @@ effect Resolve: ('a promise * 'a) -> unit
 let resolve p r = perform (Resolve (p,r))
 
 let run main =
-  let rec schedule_next () = dequeue ()
+  let schedule_next () = dequeue () in
   (* match dequeue () with
    * | Fork p f -> fork p f
    * | Continue c v -> continue c v
    * |  *)
-  and fork : 'a. 'a promise -> (unit -> 'a) -> unit = fun pr main ->
+  let rec fork : 'a. 'a promise -> (unit -> 'a) -> unit = fun pr main ->
     match main () with
     | v -> resolve_internal pr v; schedule_next ()
 

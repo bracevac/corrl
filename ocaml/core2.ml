@@ -128,7 +128,7 @@ let reify slots mboxes consumer =
            in
            (* For simplicity, we supply a consumer function for the tuples. In the paper, we provisioned a dedicated trigger effect for signaling each tuple. *)
            List.iter consumer (Mailboxes.cart mail (fun x ->
-                                   stat.n_tested <- stat.n_tested + 1;
+                                   stat.n_tested <- Int64.add stat.n_tested  1L;
                                    [x]));
            gc_time stat (fun () -> gc slots);
            continue k ()))
