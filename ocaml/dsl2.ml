@@ -106,6 +106,7 @@ module Cartesius = struct
       | effect (YF.Yield evt) k ->
          stat.n_output <- (Int64.add stat.n_output  1L);
          end_latency_sample stat;
+         end_throughput_sample stat;
          continue k ()
     in
     (fun () ->

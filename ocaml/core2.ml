@@ -154,7 +154,6 @@ let interleaved_bind: type a. a Slots.hlist ->
                            a Arrays.hlist ->
                            unit -> unit = fun slots mail suspensions ->
   let active_strands = ref (Slots.length slots) in (* for termination checking *)
-  let n_events = ref 0 in (* number of pushed events so far *)
   let stat = injectStat () in
   let rec thunk_list: type a. a Slots.hlist ->
                            a Suspensions.hlist ->
@@ -166,9 +165,10 @@ let interleaved_bind: type a. a Slots.hlist ->
        let module S = (val s) in
        let on_next ev =
          S.push ev;
-         n_events += 1;
-         mem_sample stat !n_events (fun () -> mboxrefs_size mail);
-         begin_latency_sample stat !n_events
+         stat.cursor <- stat.cursor + 1;
+         mem_sample stat (fun () -> mboxrefs_size mail);
+         begin_latency_sample stat;
+         begin_throughput_sample stat
        in
        let on_done () =
          active_strands -= 1;
