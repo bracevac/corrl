@@ -32,40 +32,38 @@ let rand_array n =
 
 (* Global parameters *)
 (* let repetitions = 10 *)
-let repetitions = 1 (* TODO for testing *)
+let repetitions = 2 (* TODO for testing *)
 let samples = 100
-let event_count = 10000
+let event_count = 10000 (* TODO: should be distributed evenly*)
 let flag_debug = true
 
 let debug s =
   if flag_debug then println s else ()
 
-let post_process measurements = measurements.(0) (* TODO *)
-
-let write_csv title results =
+let write_csv title name results =
   let tm = Unix.(gmtime (time ())) in
-  let fname = Printf.sprintf "%s_%d%0*d%0*d%0*d%0*d%0*d.csv"
-                title
+  let suffix = Printf.sprintf "%d%0*d%0*d%0*d%0*d%0*d.csv"
                 (tm.tm_year + 1900)
                 2 (tm.tm_mon + 1)
                 2 tm.tm_mday
                 2 (tm.tm_hour + 2)
                 2 tm.tm_min
                 2 tm.tm_sec in
-  let oc = open_out fname in
-  output_string oc (to_csv results);
-  close_out oc
+  let fname i = Printf.sprintf "%s_%s_%i_%s" title name i suffix in
+  Array.iteri (fun i stat ->
+      let oc = open_out (fname i) in
+      output_string oc (to_csv stat);
+      close_out oc) results
 
 let measure title instances =
   let _ = Printf.printf "%s\n%!" title in
   let num = Queue.length instances in
-  let results = Array.init num (fun _ -> fresh_stat "" 0 0 0) in
   for r = 0 to (num - 1) do
     let (name,arity,join) = Queue.pop instances in
     Printf.printf "%s: setup\n%!" name;
-    Gc.compact ();
     let measurements = Array.init repetitions (fun _ -> fresh_stat name arity event_count samples) in
     for m = 0 to (repetitions - 1) do
+      Gc.compact ();
       let stat = measurements.(m) in
       let j = try join () with (* Important to avoid measuring setup overhead *)
               | effect InjectStat k -> continue k stat
@@ -84,7 +82,6 @@ let measure title instances =
       finalize stat counter;
       Printf.printf "%s: end\n%!" name
     done;
-    results.(r) <- post_process measurements
+    write_csv title name measurements
   done;
-  write_csv title results;
   Printf.printf "%s: done\n%!" title

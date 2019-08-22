@@ -177,14 +177,14 @@ module Extensions = struct
                     enclose (fun () -> emit "aligning "; enclose (fun () -> mptrs n ()));
                     emit " |++| "; (range "most_recently" extplus ptr n ()))
 
-       let list = [{name = "cartesian";     code = (fun _ _ -> emit "CB.empty_ext") }]
+        (* let list = [{name = "cartesian";     code = (fun _ _ -> emit "CB.empty_ext") }] *)
   (* let list = [{name = "cartesian";     code = (fun _ _ -> emit "CB.empty_ext") };
    *             {name = "most_recently"; code = most_recently};
    *             {name = "affinely";      code = affinely};
    *             {name = "aligning";      code = aligning}] *)
-  (* let list = [{name = "most_recently"; code = most_recently};
-   *             {name = "affinely";      code = affinely};
-   *             {name = "aligning";      code = aligning}] *)
+  let list = [{name = "most_recently"; code = most_recently};
+              {name = "affinely";      code = affinely};
+              {name = "aligning";      code = aligning}]
 end
 
 let print_code ?(n=3) ?(xts=Extensions.list) () =
