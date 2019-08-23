@@ -48,6 +48,21 @@ let affinely: type ctx i a. int -> (i,ctx) ptr -> (ctx,a) chandler =
          S.setMail (update (S.getMail ()) x (Count.Fin n));
          continue k (S.push x)))
 
+let count_window: type ctx i a. int -> (i,ctx) ptr -> (ctx,a) chandler =
+  (fun w ptr slots _ ->
+    let module S = (val (SlotsPtr.proj (ptr ()) slots)) in
+    (fun action ->
+      try action () with
+      | effect (S.Push x) k ->
+         let mbox = S.getMail () in
+         let n = List.length mbox in
+         let _ = if w < n then
+                   S.setMail (take (n - w) mbox)
+                 else ()
+         in
+         continue k (S.push x)))
+
+
 (* Polymorphic shift/rest*)
 (* TODO: factor out to separate module*)
 type 'a polycont = { cont: 'b. ('a -> 'b) -> 'b }

@@ -51,7 +51,7 @@ module Gen = struct
     emitln "let instances = Queue.create ()";
     emitln ""
 
-  let rand_stream = "from (rand_array event_count)"
+  let rand_stream = "from (rand_array (event_count ()))"
   let ctx' i = emit "CB."; enclose (fun () -> (range rand_stream ctxat (fun _ -> ()) i ()))
   let ctx i = emit (Printf.sprintf "let ctx%d () = " i); ctx' i; emit "\n"
 
@@ -118,7 +118,15 @@ module Gen = struct
     preamble (); emitln "(* Test instances *)"
 
   let add_run title () =
-    emit "let _ = measure \""; emit title; emitln "\" instances"
+    emitln "let name = ref None";
+    emitln "let set_name n = name := Some n";
+    emitln "let _ = ";
+    indent (fun () ->
+      emitln "let speclist = [(\"-n\", Arg.String (set_name), \"Run only <name> (optional)\")] in";
+      emitln "let usage_msg = \"Generate benchmarks\" in";
+      emitln "Arg.parse speclist print_endline usage_msg;";
+      emitln "measure \""; emit title; emitln "\" instances !name"
+    )
 
   let rec digits =
     function

@@ -15,6 +15,7 @@ type t =
      mutable aux_c_throughput: (int * int64 * Mtime_clock.counter) option; (* throughput cursor, n_output at  and time counter when sample started  *)
      aux_throughput_duration: int; (* How many input events to wait until finishing the throughput sample *)
      t_gc: Mtime.span Queue.t;       (* avg. time spent garbage collecting mail in reify (ns) *)
+     mutable aux_t_gc_cursor: int; (* when was the last time gc test ran?*)
      memory: int Queue.t;     (* measure in eat *)
      mutable t_duration: Mtime.span }  (* measure at start/end (seconds) *)
 
@@ -32,6 +33,7 @@ let fresh_stat name arity event_count freq =
         aux_c_throughput = None;
         aux_throughput_duration = (int_of_float (0.9 *. (float_of_int freq)));
         t_gc = Queue.create ();
+        aux_t_gc_cursor = -1;
         memory = Queue.create ();
         t_duration = Mtime.Span.zero }
 
@@ -39,13 +41,14 @@ let finalize stat counter =
   stat.t_duration <- Mtime_clock.count counter
 
 let gc_time stat action =
-  if ((stat.cursor mod stat.sample_freq) = 0) then
-    let start = Mtime_clock.now () in
+  if ((stat.cursor mod stat.sample_freq) = 0) && stat.cursor <> stat.aux_t_gc_cursor then
     begin
+      let start = Mtime_clock.now () in
       action ();
-      Queue.push (Mtime.span (Mtime_clock.now ()) start) stat.t_gc
+      Queue.push (Mtime.span (Mtime_clock.now ()) start) stat.t_gc;
+      stat.aux_t_gc_cursor <- stat.cursor
     end
-  else ()
+  else action ()
 
 let mem_sample stat thnk =
   if ((stat.cursor mod stat.sample_freq) = 0) then
@@ -107,6 +110,7 @@ let memory_col stat =
 
 let csv_header = "name,arity,count,n_tested,n_output,t_duration_s,t_latency_ns,t_throughput_ev_s,t_gc_ns,memory"
 
+(* Computes table as list of rows, which are lists of string*)
 let table stat =
   let cols = [t_latency_col stat; t_throughput_col stat; t_gc_col stat; memory_col stat] in
   let rowcount = List.(fold_right (max) (map (length) cols) 0) in

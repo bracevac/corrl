@@ -20,6 +20,3 @@ mv dune.benchmark dune
 for i in perf*ml
     dune build (echo $i | cut -f 1 -d '.').exe --profile release
 end
-for i in ../_build/default/benchmarks/perf*.exe
-  $i
-end
