@@ -1,4 +1,9 @@
 # Cartesius
+
+**Note**: 
+This project is part of my PhD thesis from 2019 and has not been maintained. The artifact may not compile because it relies on outdated development versions of Multicore OCaml (now part of OCaml 5.0). I plan to revisit this work eventually and reimplement it in Scala 3, using effects as capabilities and
+and [capture checking](https://docs.scala-lang.org/scala3/reference/experimental/cc.html).
+
 ## Implementing Event Correlation Patterns with Algebraic Effects
 ## Or: Solving the Expression Problem for Joins
 
@@ -15,9 +20,9 @@ specifications in different ways.
 
 This repository features implementations of Cartesius in different languages:
 
-* [Multicore OCaml](https://github.com/ocamllabs/ocaml-multicore) in the `ocaml/` subfolder (**actively developed**).
+* [Multicore OCaml](https://github.com/ocamllabs/ocaml-multicore) in the `ocaml/` subfolder.
 
-* [Koka](https://github.com/koka-lang/koka) in the `koka/` subfolder (**currently not maintained**).
+* [Koka](https://github.com/koka-lang/koka) in the `koka/` subfolder.
 Please check out the [`old` branch](https://github.com/bracevac/corrl/blob/old/koka/corrl/corrl/corrl.kk)
 for the last working version.
 
