@@ -1,7 +1,7 @@
 # Cartesius
 
 **Note**: 
-This project is part of my PhD thesis from 2019 and has not been maintained. The artifact may not compile because it relies on outdated development versions of Multicore OCaml (now part of OCaml 5.0). I plan to revisit this work eventually and reimplement it in Scala 3, using effects as capabilities and
+This project is part of my PhD thesis from 2019 and has not been maintained. The artifact may not compile because it relies on outdated development versions of Multicore OCaml (now part of OCaml 5.0). I plan to revisit this work eventually and reimplement it in Scala 3, using effects as capabilities
 and [capture checking](https://docs.scala-lang.org/scala3/reference/experimental/cc.html).
 
 ## Implementing Event Correlation Patterns with Algebraic Effects
@@ -29,7 +29,7 @@ for the last working version.
 
 ## Contributors
 
-* I thank [@namin](https://github.com/namin) for collaborating with me on the initial Koka prototype.
+* I thank Nada Amin for collaborating with me on the initial Koka prototype.
 
 ## References
 
